@@ -1,0 +1,10 @@
+# Linux-style export-ignore for `git archive` (source tarball)
+# Tracked but excluded from `zig-kernel-$VERSION.tar.{gz,xz}`
+.github export-ignore
+.gitignore export-ignore
+.gitattributes export-ignore
+.zig-cache export-ignore
+zig-out export-ignore
+*.log export-ignore
+test_asm*.zig export-ignore
+test_portasm.zig export-ignore
