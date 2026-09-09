@@ -37,7 +37,8 @@ jobs:
           file zig-out/bin/kernel-baremetal
           test -f zig-out/bin/kernel-baremetal
           # entry must be 0x100000 region (multiboot/PVH at 0x100000)
-          readelf -h zig-out/bin/kernel-baremetal | grep -q "Entry point address: 0x10"
+          # readelf aligns with multiple spaces: "Entry point address:               0x10xxxx"
+          readelf -h zig-out/bin/kernel-baremetal | grep -Eq "Entry point address:\s+0x10"
           echo "ELF ok"
 
       - name: Create initramfs
@@ -46,9 +47,12 @@ jobs:
       - name: QEMU x86_64 verification
         run: |
           set -euo pipefail
+          set +e
           timeout 60 bash ./scripts/qemu-x86_64.sh 2>&1 | tee qemu-output.log; QEMU_EC=${PIPESTATUS[0]}
+          set -e
           # timeout 124 = 60s watchdog fired; allow but require expected strings
           if [ "$QEMU_EC" -eq 124 ]; then echo "QEMU timed out (watchdog 60s) — checking serial"; fi
+          if [ "$QEMU_EC" -ne 0 ] && [ "$QEMU_EC" -ne 124 ]; then echo "QEMU failed with exit $QEMU_EC"; cat qemu-output.log; exit $QEMU_EC; fi
           # hard gates: each grep must succeed or step fails
           grep -q "Zig Linux Kernel" qemu-output.log
           echo "PASS: Kernel started"
@@ -64,8 +68,8 @@ jobs:
           set -e
           make dist
           ls -lh dist/
-          sha256sum -c dist/SHA256SUMS
-          file dist/*.tar.gz
+          (cd dist && sha256sum -c SHA256SUMS)
+          file dist/*.tar.*
 
       - name: Verify kernel binary
         run: |
