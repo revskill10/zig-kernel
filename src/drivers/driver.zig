@@ -2,6 +2,7 @@
 // Clean: Bus=Framework, Device=Entity, Driver=Adapter (DIP via vtable)
 const std = @import("std");
 const printk = @import("../lib/printk.zig");
+const netdev = @import("net/net_device.zig");
 
 pub const BusType = enum { pci, platform, usb };
 
@@ -38,6 +39,11 @@ var device_count: usize = 0;
 var driver_count: usize = 0;
 
 pub fn init() void {
+    for (&devices) |*d| d.* = null;
+    for (&drivers) |*d| d.* = null;
+    device_count = 0;
+    driver_count = 0;
+    netdev.init();
     printk.printk(.info, "drivers: bus model ready (pci/platform/usb), device/driver registry ready", .{});
 }
 

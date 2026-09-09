@@ -74,6 +74,10 @@ var priv_count: usize = 0;
 var mmio_mem: [4096]u8 = [_]u8{0} ** 4096;
 
 fn allocPriv() *VirtioNetPrivate {
+    if (priv_count >= priv_storage.len) {
+        priv_count = 0;
+        for (&priv_storage) |*ps| ps.* = .{};
+    }
     const p = &priv_storage[priv_count];
     priv_count += 1;
     return p;

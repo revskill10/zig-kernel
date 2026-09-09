@@ -84,18 +84,24 @@ var open_files: [MAX_OPEN_FILES]File = undefined;
 var open_used: [MAX_OPEN_FILES]bool = [_]bool{false} ** MAX_OPEN_FILES;
 
 pub fn init() void {
+    for (&inode_used) |*u| u.* = false;
+    for (&dentry_used) |*u| u.* = false;
+    for (&open_used) |*u| u.* = false;
+    for (&inodes) |*i| i.* = .{ .ino = 0, .ftype = .regular };
+    for (&dentries) |*d| d.* = .{};
+    for (&open_files) |*f| f.* = .{};
+    inode_next = 1;
+    root_dentry = null;
+    dev_count = 0;
     root_dentry = allocDentry();
     const root_inode = allocInode(.directory) orelse unreachable;
     root_inode.mode = 0o755;
     root_dentry.?.setName("/");
     root_dentry.?.inode = root_inode;
-    // Add pre-populated entries for demo
     _ = createFile("/hello.txt", "Hello from Zig Linux VFS (ramfs)\n");
     _ = createFile("/etc/hostname", "zig-linux\n");
-    // Create /dev directory for devtmpfs
     _ = mkdiratImpl(AT_FDCWD, "/dev", 0o755) orelse {};
     _ = mkdiratImpl(AT_FDCWD, "/tmp", 0o777) orelse {};
-    // Create /sbin/init placeholder
     _ = createFile("/sbin/init", "#!/bin/sh\necho 'Hello from init'\n");
     printk.printk(.info, "vfs: ramfs mounted at / (ino={d}), VFS vtables ready", .{root_inode.ino});
 }

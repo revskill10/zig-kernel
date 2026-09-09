@@ -14,6 +14,7 @@
 // Bare-metal: src/baremetal.zig + linker.ld → zig build qemu-bin
 
 const std = @import("std");
+const builtin = @import("builtin");
 const printk = @import("lib/printk.zig");
 const boot = @import("arch/x86_64/boot.zig");
 const entry = @import("arch/x86_64/entry.zig");
@@ -295,6 +296,7 @@ test "time: timer trigger and await" {
     timer.arm();
     timer.event.signal();
     try std.testing.expect(timer.event.tryConsume());
+    timer.disarm();
 }
 
 test "stat: file type helpers" {
@@ -354,7 +356,7 @@ test "net: AF_UNIX socketpair loopback" {
 }
 
 // ── Bare-metal entry stub (hosted build still exports for completeness) ──
-export fn _start_baremetal() noreturn {
+fn _start_baremetal_fallback() noreturn {
     main() catch {
         while (true) {
             asm volatile ("hlt");
@@ -362,5 +364,11 @@ export fn _start_baremetal() noreturn {
     };
     while (true) {
         asm volatile ("hlt");
+    }
+}
+
+comptime {
+    if (!builtin.is_test) {
+        @export(&_start_baremetal_fallback, .{ .name = "_start_baremetal" });
     }
 }

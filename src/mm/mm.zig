@@ -230,8 +230,13 @@ pub fn brk(addr: usize) usize {
 pub const MAX_FD: usize = 256;
 
 pub fn init() void {
-    println("[INFO] mm: buddy {d} pages ({d} MiB) + slab + VMM ready", .{ MAX_PAGES, MAX_PAGES * PAGE_SIZE / (1024 * 1024) });
+    for (&pages) |*p| { p.in_use = false; p.ref_count = 0; }
+    for (&page_bitmap) |*b| b.* = 0;
+    for (&vm_areas) |*slot| slot.* = null;
+    vm_area_count = 0;
+    next_anon_addr = 0x20000000;
     vmmInit();
+    println("[INFO] mm: buddy {d} pages ({d} MiB) + slab + VMM ready", .{ MAX_PAGES, MAX_PAGES * PAGE_SIZE / (1024 * 1024) });
 }
 
 fn println(comptime fmt: []const u8, args: anytype) void {

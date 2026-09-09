@@ -40,4 +40,4 @@ pub fn free(skb: *SkBuff) void {
     const idx = (@intFromPtr(skb) - @intFromPtr(&pool[0])) / @sizeOf(SkBuff);
     used[idx] = false;
 }
-pub fn init() void { printk.printk(.info, "net: skbuff pool {d} x {d} B ready", .{ MAX_SKB, SKB_BUF_SIZE }); }
+pub fn init() void { for (&used) |*u| u.* = false; for (&pool) |*skb| skb.reset(); printk.printk(.info, "net: skbuff pool {d} x {d} B ready", .{ MAX_SKB, SKB_BUF_SIZE }); }

@@ -131,8 +131,9 @@ pub const Timer = struct {
         }
 
         // Swap-remove from armed list
-        armedTimers[self.index] = armedTimers[timerCount - 1];
-        if (armedTimers[self.index]) |t| {
+        const idx: usize = @intCast(self.index);
+        armedTimers[idx] = armedTimers[timerCount - 1];
+        if (armedTimers[idx]) |t| {
             t.index = self.index;
         }
         armedTimers[timerCount - 1] = null;
@@ -195,9 +196,10 @@ pub fn nsleep(ns: i64) void {
 pub fn init() void {
     monotonicClock = .{};
     realtimeClock = .{};
+    for (&armedTimers) |*slot| slot.* = null;
     timerCount = 0;
     tickHooksLen = 0;
-    println("[INFO] time: clocks + timer wheel ready (freq={d} Hz)", .{timerFrequency});
+    printk.printk(.info, "time: clocks + timer wheel ready (freq={d} Hz)", .{timerFrequency});
 }
 
 fn println(comptime fmt: []const u8, args: anytype) void {

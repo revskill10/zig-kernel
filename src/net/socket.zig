@@ -53,7 +53,13 @@ var sock_count: usize = 0;
 var next_fd: i32 = 100; // avoid collision with VFS fds 0..31
 
 pub fn init() void {
-    std.debug.print("[INFO] net: socket layer ready (AF_UNIX, AF_INET, STREAM/DGRAM/RAW)\n", .{});
+    for (&socks) |*slot| slot.* = null;
+    sock_count = 0;
+    next_fd = 100;
+    // clear unix buffers len
+    for (&unix_buf_1) |*b| b.* = 0;
+    for (&unix_buf_2) |*b| b.* = 0;
+    printk.printk(.info, "net: socket layer ready (AF_UNIX, AF_INET, STREAM/DGRAM/RAW)", .{});
 }
 
 pub fn socketCreate(domain: usize, sock_type: usize, proto: usize) !i32 {

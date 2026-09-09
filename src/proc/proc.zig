@@ -121,6 +121,22 @@ var process_used: [MAX_PROCESSES]bool = [_]bool{false} ** MAX_PROCESSES;
 var thread_used: [MAX_THREADS]bool = [_]bool{false} ** MAX_THREADS;
 
 pub fn init() void {
+    for (&processes) |*slot| slot.* = null;
+    for (&threads_by_tid) |*slot| slot.* = null;
+    for (&process_used) |*u| u.* = false;
+    for (&thread_used) |*u| u.* = false;
+    for (&process_storage) |*ps| ps.* = .{
+        .pid = 0, .ppid = 0, .pgid = 0, .sid = 0,
+        .threads = &[_]?*u32{}, .fds = [_]?*vfs.File{null} ** MAX_FD,
+        .children = [_]?*Process{null} ** 16,
+        .threads_lock = .{}, .fds_lock = .{}, .children_lock = .{},
+        .event = .{ .lock = .{} },
+        .name = "",
+    };
+    for (&thread_storage) |*ts| ts.* = .{ .tid = 0, .pid = 0, .name = "", .process = null };
+    next_pid = 1;
+    current_pid = 1;
+    thread_count_total = 0;
     var i: usize = 0;
     while (i < MAX_PROCESSES) : (i += 1) {
         process_storage[i] = .{
@@ -132,7 +148,6 @@ pub fn init() void {
             .name = "",
         };
     }
-    // Initialize first process slot (PID 1 = init)
     const init_proc = allocProcess("init");
     if (init_proc) |p| {
         p.ppid = 0;

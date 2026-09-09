@@ -48,6 +48,12 @@ pub fn first() ?*NetDevice {
 }
 pub fn count() usize { return dev_count; }
 
+pub fn init() void {
+    for (&devs) |*d| d.* = null;
+    for (&dev_storage) |*d| d.* = .{ .name = "", .ops = undefined };
+    dev_count = 0;
+}
+
 pub fn transmit(dev: *NetDevice, skb: *skbuff.SkBuff) !void {
     try dev.ops.xmit(dev, skb);
     dev.tx_packets += 1;

@@ -21,11 +21,13 @@ var waiters: [MAX_FUTEXES]FutexWaiter = undefined;
 var waiter_count: usize = 0;
 
 pub fn init() void {
-    println("[INFO] futex: subsystem ready (max_waiters={d})\n", .{ MAX_FUTEXES });
+    waiter_count = 0;
+    for (&waiters) |*w| w.* = .{ .addr = 0, .thread_id = 0 };
+    printk.printk(.info, "futex: subsystem ready (max_waiters={d})", .{ MAX_FUTEXES });
 }
 
 pub fn wait(addr: u64, expected: u32) i32 {
-    println("[INFO] futex: wait(addr=0x{x}, expected={d})\n", .{ addr, expected });
+    printk.printk(.info, "futex: wait(addr=0x{x}, expected={d})", .{ addr, expected });
     // In hosted sim: simulate immediate EAGAIN (no actual blocked threads)
     if (waiter_count < MAX_FUTEXES) {
         waiters[waiter_count] = .{

@@ -26,6 +26,7 @@ const MAX_PIPES: usize = 16;
 var pipes: [MAX_PIPES]?Pipe = [_]?Pipe{null} ** MAX_PIPES;
 
 pub fn init() void {
+    for (&pipes) |*slot| slot.* = null;
     printk.printk(.info, "pipe: subsystem ready (PIPE_BUF={d}, max_pipes={d})", .{ PIPE_BUF, MAX_PIPES });
 }
 
