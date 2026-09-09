@@ -10,6 +10,8 @@ const paging = @import("arch/i386/paging.zig");
 
 const SERIAL_COM1: u16 = 0x3F8;
 
+var boot_lock: u8 = 0;
+
 // Multiboot v1 header — QEMU -kernel multiboot path (must be in first 8KiB, 4-byte aligned)
 comptime {
     asm(
@@ -222,6 +224,11 @@ fn net_recv(buf: []u8) usize {
 export fn _start() callconv(.naked) noreturn {
     asm volatile (
         \\ cli
+        \\ mov %[lock], %ebx
+        \\ mov $1, %al
+        \\ lock xchg %al, (%ebx)
+        \\ test %al, %al
+        \\ jnz 2f
         \\ mov %cr0, %eax
         \\ and $0xfffffffb, %eax
         \\ or $0x2, %eax
@@ -233,8 +240,11 @@ export fn _start() callconv(.naked) noreturn {
         \\ call %[kmain:P]
         \\ 1: hlt
         \\ jmp 1b
+        \\ 2: hlt
+        \\ jmp 2b
         :
         : [kmain] "X" (&kmain),
+          [lock] "r" (&boot_lock),
     );
 }
 
