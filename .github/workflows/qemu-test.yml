@@ -16,7 +16,7 @@ jobs:
       - name: Install QEMU
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-system-aarch64 build-essential cpio
+          sudo apt-get install -y qemu-system-x86 qemu-system-aarch64 build-essential cpio binutils
 
       - name: Install Zig 0.16.0
         uses: mlugg/setup-zig@v2
@@ -25,25 +25,49 @@ jobs:
 
       - name: Hosted build and test
         run: |
-          zig build test --verbose 2>&1 | tee hosted-test-output.log
-          # zig build test harness reports via stderr; check exit code
-          # hosted-test-output.log will contain test results
+          zig build test 2>&1 | tee hosted-test-output.log
+          test ${PIPESTATUS[0]} -eq 0
 
       - name: Build QEMU ELF
         run: zig build qemu-bin
+
+      - name: Verify ELF
+        run: |
+          set -e
+          file zig-out/bin/kernel-baremetal
+          test -f zig-out/bin/kernel-baremetal
+          # entry must be 0x100000 region (multiboot/PVH at 0x100000)
+          readelf -h zig-out/bin/kernel-baremetal | grep -q "Entry point address: 0x10"
+          echo "ELF ok"
 
       - name: Create initramfs
         run: bash ./scripts/create-initramfs.sh
 
       - name: QEMU x86_64 verification
         run: |
-          timeout 60 bash ./scripts/qemu-x86_64.sh 2>&1 | tee qemu-output.log || true
-          # Verify key outputs
-          grep -q "Zig Linux Kernel" qemu-output.log && echo "PASS: Kernel started"
-          grep -q "hello.txt" qemu-output.log && echo "PASS: VFS working"
-          grep -q "Demo complete" qemu-output.log && echo "PASS: All demos"
+          set -euo pipefail
+          timeout 60 bash ./scripts/qemu-x86_64.sh 2>&1 | tee qemu-output.log; QEMU_EC=${PIPESTATUS[0]}
+          # timeout 124 = 60s watchdog fired; allow but require expected strings
+          if [ "$QEMU_EC" -eq 124 ]; then echo "QEMU timed out (watchdog 60s) — checking serial"; fi
+          # hard gates: each grep must succeed or step fails
+          grep -q "Zig Linux Kernel" qemu-output.log
+          echo "PASS: Kernel started"
+          grep -q "hello.txt" qemu-output.log
+          echo "PASS: VFS working"
+          grep -q "Demo complete" qemu-output.log
+          echo "PASS: All demos"
+          grep -q "KERNEL_HALT\|Kernel alive - hlt loop" qemu-output.log
+          echo "PASS: hlt watchdog reached"
+
+      - name: make dist
+        run: |
+          set -e
+          make dist
+          ls -lh dist/
+          sha256sum -c dist/SHA256SUMS
+          file dist/*.tar.gz
 
       - name: Verify kernel binary
         run: |
-          file zig-out/bin/kernel-baremetal 2>/dev/null || file zig-out/bin/zig-kernel
           ls -la zig-out/bin/
+          ls -la dist/

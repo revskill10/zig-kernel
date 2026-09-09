@@ -4,6 +4,10 @@
 // Slice 1: kmain runs real subsystem demos (mm/vfs/sched/net) and streams
 // computed results over COM1 serial - not a static banner.
 
+const gdt = @import("arch/i386/gdt.zig");
+const idt = @import("arch/i386/idt.zig");
+const paging = @import("arch/i386/paging.zig");
+
 const SERIAL_COM1: u16 = 0x3F8;
 
 // Multiboot v1 header — QEMU -kernel multiboot path (must be in first 8KiB, 4-byte aligned)
@@ -228,6 +232,9 @@ export fn _start() callconv(.naked) noreturn {
 }
 
 fn kmain() callconv(.c) void {
+    gdt.gdt_init();
+    idt.idt_init();
+    paging.paging_init();
     serial_init();
     serial_write("\nZig Linux Kernel — Minimal Complete (bare-metal)\n");
     serial_write("arch: x86  layout: monolithic  zig: 0.16.0\n");
@@ -392,6 +399,7 @@ fn kmain() callconv(.c) void {
     serial_write("serial: COM1 0x3F8 ready\n");
     serial_write("Demo complete. Bare-metal checks passed.\n");
     serial_write("Kernel alive - hlt loop. Power off via QEMU monitor.\n");
+    serial_write("KERNEL_HALT\n");
     while (true) {
         asm volatile ("hlt");
     }
