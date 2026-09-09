@@ -34,100 +34,91 @@ choco install qemu
 
 ## Implementation Steps
 
-### Step 1: Update build.zig for Bare-Metal Target
+### Step 1: Verify build.zig for Bare-Metal Target
 
 **File**: `build.zig`
 
-Add after line 28:
+The build.zig already includes a bare-metal build step for QEMU verification:
 
 ```zig
-    // ── QEMU verification build (bare-metal) ──
-    const qemu_target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os = .none }) catch unreachable;
-    const qemu_exe = b.addExecutable(.{
-        .name = "kernel-baremetal",
-        .root_module = exe_mod,
-        .target = qemu_target,
-        .optimize = optimize,
-    });
-    // Add linker script for proper section layout
-    qemu_exe.setLinkerScript(b.path("linker.ld"));
-    const qemu_step = b.step("qemu-img", "Build bare-metal kernel for QEMU");
-    qemu_step.dependOn(&qemu_exe.step);
-    const qemu_run = b.addRunArtifact(qemu_exe);
-    const qemu_run_step = b.step("qemu-run", "Run kernel in QEMU");
-    qemu_run_step.dependOn(&qemu_exe.step);
-    if (b.args) |args| qemu_run.addArgs(args);
-```
-
-### Step 2: Add Freestanding Entry Point
-
-**File**: `src/arch/x86_64/entry.zig`
-
-Add export for bare-metal start:
-
-```zig
-// At end of entry.zig or in a new file src/arch/x86_64/start.zig
-export fn _start() noreturn {
-    main() catch {
-        while (true) { asm volatile ("hlt"); }
+    // Bare-metal build for QEMU verification
+    // Usage: zig build qemu-bin            (defaults to freestanding x86_64)
+    //    or: zig build qemu-bin -Dtarget=x86_64-freestanding-none -Doptimize=ReleaseSmall
+    const bare_target_query: std.Target.Query = .{
+        .cpu_arch = .x86,
+        .os_tag = .freestanding,
+        .abi = .none,
     };
-    while (true) { asm volatile ("hlt"); }
-}
+    const bare_target = b.resolveTargetQuery(bare_target_query);
+
+    const bare_exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/baremetal.zig"),
+        .target = bare_target,
+        .optimize = .ReleaseSmall,
+    });
+
+    const bare_exe = b.addExecutable(.{
+        .name = "kernel-baremetal",
+        .root_module = bare_exe_mod,
+    });
+
+    bare_exe.setLinkerScript(b.path("linker.ld"));
+
+    const qemu_bin_step = b.step("qemu-bin", "Build bare-metal kernel ELF for QEMU");
+    qemu_bin_step.dependOn(&bare_exe.step);
 ```
 
-### Step 3: Create QEMU Launch Script
+The existing bare-metal target is configured for x86 freestanding (32-bit) and produces `kernel-baremetal` in `zig-out/bin/`.
 
-Create `scripts/qemu-launch.sh`:
+### Step 2: Verify Freestanding Entry Point
 
+**File**: `src/baremetal.zig`
+
+The bare-metal entry point already exists in `src/baremetal.zig` with:
+- `_start` function as the ELF entry point (exported)
+- Serial port initialization and output
+- Kernel main function that initializes subsystems and enters hlt loop
+- Uses x86 inline assembly for port I/O
+
+### Step 3: Verify/Create QEMU Launch Script
+
+Check for existing script: `scripts/run-qemu.sh`
+
+The `scripts/run-qemu.sh` script already exists and provides QEMU launching capability. It:
+- Builds for x86_64 or aarch64 targets
+- Checks for cross-compiler availability
+- Creates initramfs if needed
+- Launches QEMU with appropriate parameters
+
+Make it executable if not already:
 ```bash
-#!/bin/bash
-set -e
-
-KERNEL="zig-out/bin/kernel-baremetal"
-if [ ! -f "$KERNEL" ]; then
-    KERNEL="zig-out/kernel/x86_64/kernel-baremetal"
-fi
-
-qemu-system-x86_64 \
-  -machine q35,accel=tcg \
-  -cpu qemu64 \
-  -smp 1 \
-  -m 512M \
-  -kernel "$KERNEL" \
-  -append "console=ttyS0 loglevel=7" \
-  -nographic \
-  -no-reboot \
-  -serial stdio
-```
-
-Make executable:
-
-```bash
-chmod +x scripts/qemu-launch.sh
+chmod +x scripts/run-qemu.sh
 ```
 
 ### Step 4: Build and Run
 
 ```bash
-# Build bare-metal ELF
-zig build qemu-img -Dtarget=x86_64-none-elf -Doptimize=ReleaseSmall
+# Build bare-metal ELF (x86 freestanding, 32-bit)
+zig build qemu-bin
 
-# Verify ELF header
-file zig-out/bin/kernel-baremetal
+# Verify ELF header (using alternative to 'file' command on Windows)
+# The ELF magic bytes should be 7f 45 4c 46
+# We can check with: [System.BitConverter]::ToString([System.IO.File]::ReadAllBytes("zig-out/bin/kernel-baremetal")[0..3])
 
-# Run in QEMU
-./scripts/qemu-launch.sh
-# or
-zig build qemu-run
+# Run in QEMU using the existing script
+.\scripts\run-qemu.sh x86_64
+
+# For aarch64 (if cross-compiler available)
+.\scripts\run-qemu.sh aarch64
 ```
 
 ## Verification Checklist
 
 - [x] Cross-compilation target available
-- [x] build.zig updated with `qemu-img` step
-- [ ] `_start` entry point exports `noreturn` (needs implementation due to inline asm issues)
+- [x] build.zig updated with `qemu-bin` step
+- [x] `_start` entry point exports `noreturn` (in baremetal.zig)
 - [x] QEMU script created and executable
-- [ ] Kernel boots with "boot: Zig Linux" message (blocked by inline asm)
+- [ ] Kernel boots with "Booting zig-kernel bare-metal (x86 freestanding)..." message (blocked by inline asm)
 - [x] Hosted simulation boots with all demos (VFS, network, scheduler, MM)
 - [x] e1000 driver verified in hosted simulation (loopback test passes)
 - [x] virtio-net driver implemented and verified in hosted simulation (loopback test passes)
@@ -163,45 +154,30 @@ zig build qemu-run
 ## Expected QEMU Output (when bare-metal build succeeds)
 
 ```
-============================================================
- Zig Linux Kernel — Minimal Complete (bare-metal)
- boot: arch: x86_64  layout: monolithic+LKMs
- boot: entry=_start → kernel_main | Ring3↔Ring0 via syscall table
- boot: subsystems: sched | mm | vfs | drivers | net | security
- VFS: read /hello.txt via syscall read → 'Hello from Zig Linux VFS (ramfs)' (33B)
- net: recv() ← 72B 'HELLO from Zig Linux net stack ...'
-   eth0: tx 1 pkts 72B  rx 0 pkts 0B  mac 52:54:00:12:34:56
-   eth1: tx 1 pkts 72B  rx 0 pkts 0B  mac 52:54:00:12:34:56 (virtio-net)
- tick 0: task idle: cpu idle (hlt analog)
- tick 1: task logger: dmesg flushed (0 pages used)
- tick 2: task net_watch: RX queue 0 skb(s) pending
- tick 3-5: ...
- mm: allocPage → p1=Some(0x7ff...) p2=Some(0x7ff...) used=2/4096
- mm: freePage p1 → used=1
- slab: alloc u32 → a=Some(0x...) b=Some(0x...) count=2
- slab: *a = 0xdeadbeef
-============================================================
- Kernel summary
-  tasks: 3  pages used: 2/4096  netdev: 2  RX queue: 0
-   eth0: tx 1 pkts 72B  rx 0 pkts 0B  mac 52:54:00:12:34:56
-   eth1: tx 1 pkts 72B  rx 0 pkts 0B  mac 52:54:00:12:34:56
-   processes: 1  max_pid: 2  max_fd: 0  max_threads: 3
-============================================================
+Booting zig-kernel bare-metal (x86 freestanding)...
+arch: x86  layout: monolithic  zig: 0.16.0
+subsystems: sched | mm | vfs | drivers | net | security
+serial: COM1 0x3F8 ready
+e1000: simulated NIC eth0 mac 52:54:00:12:34:56
+virtio_net: simulated NIC eth1 mac 52:54:00:AB:CD:EF
+VFS: ramfs /hello.txt ready
+Kernel alive - hlt loop. Power off via QEMU monitor.
 ```
 
 ## Troubleshooting
 
 ### Kernel doesn't boot / hangs
 
-1. Check `file zig-out/bin/kernel-baremetal` - should be ELF x86-64
+1. Check that `zig-out/bin/kernel-baremetal` exists and is not empty
 2. Verify linker script includes `.text` section with `_start`
-3. Add `nop` or `hlt` in `_start` to prevent undefined behavior
-4. Check inline assembly syntax for target architecture
+3. Check inline assembly syntax for target architecture (known issue in baremetal.zig for Zig 0.16.0)
+4. Ensure QEMU is properly installed and in PATH
 
 ### Symbol `main` not found
 
-- Ensure `main` is declared `pub` in `src/main.zig`
-- Add `pub` visibility to entry point functions
+- The baremetal.zig does not depend on `main.zig`; it is standalone
+- Ensure `main` is declared `pub` in `src/main.zig` for hosted simulation
+- Add `pub` visibility to entry point functions if needed
 
 ### Network loopback fails
 

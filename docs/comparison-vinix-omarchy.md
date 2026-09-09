@@ -7,7 +7,7 @@ Three kernels, same architecture pattern:
 | Kernel | Language | Architecture | State |
 |--------|----------|--------------|-------|
 | vinix | V | Monolithic + LKM | Production |
-| zig-kernel | Zig 0.16.0 | Clean Architecture | Hosted sim, bare-metal ready |
+| zig-kernel | Zig 0.16.0 | Clean Architecture | Hosted sim, bare-metal QEMU verification in progress (inline asm under investigation) |
 | Omarchy | C (Linux 6.18.7) | Monolithic | Production |
 
 ## Subsystem Comparison Matrix
@@ -122,15 +122,15 @@ Config: waku_os_config
 
 QEMU command pattern:
 ```bash
-qemu-system-x86_64 \
-  -L "$firmware_dir" \
-  -machine q35,accel=tcg \
-  -cpu qemu64 \
-  -smp 1 \
-  -m 512 \
-  -boot order=d,menu=off \
-  -cdrom "$iso" \
-  -nographic \
+qemu-system-x86_64 \\
+  -L \"$firmware_dir\" \\
+  -machine q35,accel=tcg \\
+  -cpu qemu64 \\
+  -smp 1 \\
+  -m 512 \\
+  -boot order=d,menu=off \\
+  -cdrom \"$iso\" \\
+  -nographic \\
   -no-reboot
 ```
 
@@ -138,31 +138,34 @@ qemu-system-x86_64 \
 
 ```
 Build: build.zig
-  └─ Target: x86_64-freestanding-none
+  └─ Target: x86-freestanding-none (32-bit bare-metal)
   └─ Linker: linker.ld
-  ├─ arch/x86_64/boot.zig (earlyBoot)
-  ├─ arch/x86_64/entry.zig (syscall dispatch)
-  └─ main.zig (demo tasks)
+  └─ Source: src/baremetal.zig (standalone bare-metal kernel)
+  └─ Demo: src/main.zig (hosted simulation, used for VFS/network tests)
 ```
 
-QEMU target command:
+QEMU target command (using existing script):
 ```bash
-qemu-system-x86_64 \
-  -machine q35,accel=tcg \
-  -cpu qemu64 \
-  -smp 1 \
-  -m 512M \
-  -kernel zig-out/bin/kernel-baremetal \
-  -append "console=ttyS0 loglevel=7" \
-  -nographic \
-  -no-reboot
+# Build bare-metal ELF (x86 freestanding, 32-bit)
+zig build qemu-bin
+
+# Run in QEMU using the existing script (checks for cross-compiler)
+.\scripts\run-qemu.sh x86_64   # Note: script uses -kernel for ELF boot, expects 64-bit kernel; for 32-bit we may need to adjust
+# Alternatively, direct QEMU command for 32-bit:
+qemu-system-i386 \\
+  -machine q35 \\
+  -kernel zig-out/bin/kernel-baremetal \\
+  -append \"console=ttyS0\" \\
+  -nographic \\
+  -no-reboot \\
+  -serial stdio
 ```
 
 ### Key Similarities
 
 1. **Console**: ttyS0 with -nographic
 2. **Machine**: q35 chipset
-3. **CPU**: qemu64 emulation
+3. **CPU**: qemu64 emulation (Omarchy) vs qemu64/i386 (zig-kernel)
 4. **Memory**: 512M
 5. **Loglevel**: Debug/info level logging
 
@@ -171,11 +174,11 @@ qemu-system-x86_64 \
 | Aspect | vinix | zig-kernel | Omarchy |
 |--------|-------|------------|---------|
 | **Language** | V | Zig | C |
-| **Boot** | Limine | Direct ELF | GRUB2 |
+| **Boot** | Limine | Direct ELF (32-bit) | GRUB2 |
 | **Network** | e1000 sim | e1000 sim, virtio-net sim | virtio-net |
 | **Storage** | ramfs | ramfs | ISO9660 overlay |
 | **Init** | Native tasks | Native tasks | systemd |
-| **Verification** | Tests + QEMU | Tests → QEMU | Full boot tests |
+| **Verification** | Tests + QEMU | Tests → QEMU (script) | Full boot tests |
 
 ## Parity Status: zig-kernel → vinix ✓
 
@@ -207,12 +210,13 @@ qemu-system-x86_64 \
 
 ### Verified Infrastructure
 
-- [x] `linker.ld` - ELF linker script for bare-metal
-- [x] `build.zig` - QEMU build step (`zig build qemu-img`)
-- [x] `_start_baremetal` - Exported entry point in main.zig
-- [x] All 15 unit tests pass
+- [x] `linker.ld` - ELF linker script for bare-metal (32-bit)
+- [x] `build.zig` - QEMU build step (`zig build qemu-bin` for bare-metal)
+- [x] `src/baremetal.zig` - Bare-metal entry point (`_start`) and serial output
+- [x] All 15 unit tests pass (hosted simulation)
 - [x] e1000 driver verified in hosted simulation (loopback test passes)
 - [x] virtio-net driver verified in hosted simulation (loopback test passes)
+- [x] `scripts/run-qemu.sh` - QEMU launch script (with cross-compiler check)
 
 ### Intentional Gaps (Hosted Simulation)
 
@@ -227,9 +231,22 @@ qemu-system-x86_64 \
 
 ## Next Steps for QEMU Verification
 
-1. Fix inline assembly syntax in baremetal.zig for Zig 0.16.0
-2. Build and test: `zig build qemu-img` → `./scripts/qemu-launch.sh`
-3. Verify output matches expected QEMU output
+1. Fix inline assembly syntax in baremetal.zig for Zig 0.16.0 (known issue with `outb`/`inb` constraints)
+2. Build and test: `zig build qemu-bin` → `.\scripts\run-qemu.sh x86_64` (or direct QEMU command for 32-bit)
+3. Verify output matches expected QEMU output (see below)
+
+## Expected QEMU Output (when bare-metal build succeeds)
+
+```
+Booting zig-kernel bare-metal (x86 freestanding)...
+arch: x86  layout: monolithic  zig: 0.16.0
+subsystems: sched | mm | vfs | drivers | net | security
+serial: COM1 0x3F8 ready
+e1000: simulated NIC eth0 mac 52:54:00:12:34:56
+virtio_net: simulated NIC eth1 mac 52:54:00:AB:CD:EF
+VFS: ramfs /hello.txt ready
+Kernel alive - hlt loop. Power off via QEMU monitor.
+```
 
 ## References
 
