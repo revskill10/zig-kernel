@@ -47,9 +47,12 @@ jobs:
       - name: QEMU x86_64 verification
         run: |
           set -euo pipefail
+          set +e
           timeout 60 bash ./scripts/qemu-x86_64.sh 2>&1 | tee qemu-output.log; QEMU_EC=${PIPESTATUS[0]}
+          set -e
           # timeout 124 = 60s watchdog fired; allow but require expected strings
           if [ "$QEMU_EC" -eq 124 ]; then echo "QEMU timed out (watchdog 60s) — checking serial"; fi
+          if [ "$QEMU_EC" -ne 0 ] && [ "$QEMU_EC" -ne 124 ]; then echo "QEMU failed with exit $QEMU_EC"; cat qemu-output.log; exit $QEMU_EC; fi
           # hard gates: each grep must succeed or step fails
           grep -q "Zig Linux Kernel" qemu-output.log
           echo "PASS: Kernel started"
