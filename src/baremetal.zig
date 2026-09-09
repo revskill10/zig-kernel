@@ -1,8 +1,7 @@
 // Bare-metal kernel for QEMU verification (x86 freestanding, -kernel direct load)
 // QEMU loads this ELF at 0x100000 and jumps to _start in 32-bit protected mode.
 // Needs multiboot v1 header and/or PVH ELF Note (QEMU >=8 requires one).
-// Slice 1: kmain runs real subsystem demos (mm/vfs/sched/net) and streams
-// computed results over COM1 serial - not a static banner.
+// Slice 5 t5a: kmain now demos #PF(14) handle_mm_fault demand paging (64..256MiB).
 
 const gdt = @import("arch/i386/gdt.zig");
 const idt = @import("arch/i386/idt.zig");
@@ -101,6 +100,16 @@ fn serial_writeHexByte(b: u8) void {
     const hex = "0123456789abcdef";
     serial_putc(hex[(b >> 4) & 0xF]);
     serial_putc(hex[b & 0xF]);
+}
+
+fn serial_writeHex32(v: u32) void {
+    const hex = "0123456789abcdef";
+    var i: usize = 8;
+    while (i > 0) {
+        i -= 1;
+        const shift: u5 = @intCast(i * 4);
+        serial_putc(hex[(v >> shift) & 0xF]);
+    }
 }
 
 fn serial_writeMac(mac: [6]u8) void {
@@ -294,6 +303,70 @@ fn kmain() callconv(.c) void {
         serial_write("slab: *a = 0xdeadbeef\n");
     }
     if (a) |ptr| slab_free(ptr);
+
+    // --- #PF(14) demand paging demo: handle_mm_fault + IDT[14] ---
+    serial_write("pf: IDT[14] #PF gate ");
+    if (idt.isPfPresent()) {
+        serial_write("present attr=0x");
+        serial_writeHexByte(idt.pfGateAttr());
+    } else {
+        serial_write("NOT PRESENT");
+    }
+    serial_write(" paging 64MiB identity, demand 64..256MiB\n");
+    const pf_addr1: u32 = 0x05000000;
+    serial_write("pf: test addr 0x");
+    serial_writeHex32(pf_addr1);
+    serial_write(" isMapped=");
+    serial_writeUsize(if (paging.isMapped(pf_addr1)) 1 else 0);
+    serial_write(" -> handle_mm_fault...\n");
+    const pf_rc = paging.handle_mm_fault(pf_addr1, 0x02);
+    serial_write("pf: handle_mm_fault rc=");
+    if (pf_rc < 0) {
+        serial_write("-");
+        serial_writeUsize(@intCast(-pf_rc));
+    } else serial_writeUsize(@intCast(pf_rc));
+    serial_write(" isMapped now ");
+    serial_writeUsize(if (paging.isMapped(pf_addr1)) 1 else 0);
+    serial_write(" pf_handled=");
+    serial_writeUsize(paging.pf_handled);
+    serial_write("\n");
+    // real volatile access at pf_addr1 (now mapped, should not fault)
+    {
+        const ptr = @as(*volatile u32, @ptrFromInt(@as(usize, pf_addr1)));
+        ptr.* = 0xDEADBEEF;
+        const v = ptr.*;
+        serial_write("pf: volatile write/read at 0x");
+        serial_writeHex32(pf_addr1);
+        serial_write(" -> 0x");
+        serial_writeHex32(v);
+        serial_write(if (v == 0xDEADBEEF) " ok\n" else " MISMATCH\n");
+    }
+    // second fault via real #PF handler: touch unmapped addr without pre-handle, CPU should trap to pf_entry
+    const pf_addr2: u32 = 0x06001000;
+    serial_write("pf: real #PF test at 0x");
+    serial_writeHex32(pf_addr2);
+    serial_write(" isMapped=");
+    serial_writeUsize(if (paging.isMapped(pf_addr2)) 1 else 0);
+    serial_write(" -> volatile write (expect #PF trap -> handle)\n");
+    const before_hit = idt.pf_hit_count;
+    const before_handled = paging.pf_handled;
+    {
+        const ptr2 = @as(*volatile u32, @ptrFromInt(@as(usize, pf_addr2)));
+        ptr2.* = 0xCAFEBABE;
+        const v2 = ptr2.*;
+        serial_write("pf: after trap read 0x");
+        serial_writeHex32(v2);
+        serial_write(if (v2 == 0xCAFEBABE) " ok" else " MISMATCH");
+        serial_write(" pf_hit=");
+        serial_writeUsize(idt.pf_hit_count - before_hit);
+        serial_write(" pf_handled delta=");
+        serial_writeUsize(paging.pf_handled - before_handled);
+        serial_write(" last_addr=0x");
+        serial_writeHex32(idt.pf_last_addr);
+        serial_write(" err=0x");
+        serial_writeHexByte(@intCast(idt.pf_last_err & 0xFF));
+        serial_write("\n");
+    }
 
     // --- VFS demo: also prove Ring3->Ring0 via IDT 0x80 dispatch ---
     // ponytail: int 0x80 trap via pusha/iret hangs on SMP QEMU (run 34343512554);

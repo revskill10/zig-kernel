@@ -1,4 +1,6 @@
-// IDT 256 entries + 0x80 DPL3 trap gate. Parity with arch/x86_64/entry.zig (66 entries).
+// IDT 256 entries + 0x80 DPL3 trap gate + #PF(14) DPL0 interrupt gate. Parity with arch/x86_64/entry.zig (66 entries).
+const paging = @import("paging.zig");
+
 var idt: [256]IDTEntry align(8) = [_]IDTEntry{.{ .offset_low = 0, .selector = 0, .zero = 0, .type_attr = 0, .offset_high = 0 }} ** 256;
 var idt_desc: IDTDescriptor align(4) = undefined;
 
@@ -6,6 +8,11 @@ pub const IDTEntry = packed struct { offset_low: u16, selector: u16, zero: u8 = 
 pub const IDTDescriptor = packed struct { limit: u16, base: u32 };
 pub inline fn cli() void { asm volatile ("cli" ::: .{ .memory = true }); }
 pub inline fn sti() void { asm volatile ("sti" ::: .{ .memory = true }); }
+
+// pf stats (mirrors paging.pf_handled but counted at entry)
+pub var pf_hit_count: usize = 0;
+pub var pf_last_addr: u32 = 0;
+pub var pf_last_err: u32 = 0;
 
 // --- syscall table parity (mirrors entry.zig) ---
 pub const SYSCALL_MAX: usize = 66;
@@ -51,6 +58,12 @@ fn setGate(vec: u8, handler: usize, dpl: u2) void {
     idt[vec] = .{ .offset_low = @intCast(handler & 0xFFFF), .selector = 0x08, .type_attr = attr, .offset_high = @intCast((handler >> 16) & 0xFFFF) };
 }
 
+fn setInterruptGate(vec: u8, handler: usize) void {
+    // P=1, DPL=00, 0, type=1110 (32-bit interrupt gate) => 0x8E. Clears IF on entry.
+    const attr: u8 = 0x8E;
+    idt[vec] = .{ .offset_low = @intCast(handler & 0xFFFF), .selector = 0x08, .type_attr = attr, .offset_high = @intCast((handler >> 16) & 0xFFFF) };
+}
+
 export fn syscall_entry() callconv(.naked) void {
     asm volatile (
         \\pusha
@@ -73,9 +86,40 @@ export fn syscall_dispatch(frame: *TrapFrame) callconv(.c) void {
     frame.eax = @bitCast(@as(i32, @intCast(ret)));
 }
 
+// --- #PF(14) page fault ---
+export fn pf_entry() callconv(.naked) void {
+    asm volatile (
+        \\pusha
+        \\mov %cr2, %eax
+        \\mov 32(%esp), %ebx
+        \\push %ebx
+        \\push %eax
+        \\call pf_dispatch
+        \\add $8, %esp
+        \\popa
+        \\add $4, %esp
+        \\iret
+        ::: .{ .memory = true }
+    );
+}
+
+export fn pf_dispatch(fault_addr: u32, error_code: u32) callconv(.c) void {
+    pf_hit_count += 1;
+    pf_last_addr = fault_addr;
+    pf_last_err = error_code;
+    _ = paging.handle_mm_fault(fault_addr, error_code);
+}
+
 pub fn idt_init() void {
     cli();
     setGate(0x80, @intFromPtr(&syscall_entry), 3);
+    setInterruptGate(14, @intFromPtr(&pf_entry));
     idt_desc = .{ .limit = @sizeOf(@TypeOf(idt)) - 1, .base = @intFromPtr(&idt[0]) };
     asm volatile ("lidt (%[p])" : : [p] "r" (&idt_desc) : .{ .memory = true });
 }
+
+// helpers for baremetal introspection
+pub fn isPfPresent() bool {
+    return (idt[14].type_attr & 0x80) != 0;
+}
+pub fn pfGateAttr() u8 { return idt[14].type_attr; }
