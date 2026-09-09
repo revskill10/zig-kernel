@@ -1,0 +1,29 @@
+# Zig build artifacts
+.zig-cache/
+zig-out/
+
+# Compiled objects / images
+*.o
+*.a
+*.elf
+*.bin
+*.iso
+*.img
+*.hdd
+
+# Temp test files
+test_asm*.zig
+test_portasm.zig
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Env / secrets
+.env

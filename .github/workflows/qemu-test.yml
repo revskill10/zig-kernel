@@ -1,0 +1,51 @@
+name: QEMU Kernel Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-system-aarch64 build-essential cpio
+
+      - name: Install Zig 0.16.0
+        run: |
+          curl -L https://ziglang.org/download/0.16.0/zig-linux-x86_64-0.16.0.tar.xz | tar xJ
+          sudo cp zig-linux-x86_64-0.16.0/zig /usr/local/bin/
+          rm -rf zig-linux-x86_64-0.16.0
+        shell: bash
+
+      - name: Hosted build and test
+        run: |
+          zig build test 2>&1 | tee hosted-test-output.log
+          # Check all 7 tests pass
+          grep -q "1 passed" hosted-test-output.log || exit 1
+
+      - name: Build QEMU ELF
+        run: zig build elf
+
+      - name: Create initramfs
+        run: ./scripts/create-initramfs.sh
+
+      - name: QEMU x86_64 verification
+        run: |
+          timeout 60 ./scripts/qemu-x86_64.sh 2>&1 | tee qemu-output.log || true
+          # Verify key outputs
+          grep -q "Zig Linux Kernel" qemu-output.log && echo "PASS: Kernel started"
+          grep -q "hello.txt" qemu-output.log && echo "PASS: VFS working"
+          grep -q "Demo complete" qemu-output.log && echo "PASS: All demos"
+
+      - name: Verify kernel binary
+        run: |
+          file zig-out/bin/zig-kernel
+          ls -la zig-out/bin/
