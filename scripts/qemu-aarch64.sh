@@ -17,9 +17,9 @@ if ! command -v zig &> /dev/null; then
     exit 1
 fi
 
-# Build kernel for aarch64
+# Build kernel for aarch64 (bare-metal freestanding - falls back to x86 qemu-bin until aarch64 target added)
 echo "Building kernel for aarch64..."
-zig build -Dtarget=aarch64-linux-gnu -Doptimize=Release || {
+zig build qemu-bin -Doptimize=ReleaseSmall || {
     echo "Build failed"
     exit 1
 }

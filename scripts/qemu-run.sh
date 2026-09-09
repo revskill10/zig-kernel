@@ -23,7 +23,7 @@ if [ ! -f "$KERNEL" ]; then
         log_err "Zig compiler not found. Please install Zig 0.16+"
         exit 1
     fi
-    zig build -Dtarget=x86_64-freestanding -Doptimize=ReleaseSmall || {
+    zig build qemu-bin -Doptimize=ReleaseSmall || zig build -Doptimize=ReleaseSmall || {
         log_err "Build failed"
         exit 1
     }

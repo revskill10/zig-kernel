@@ -22,12 +22,17 @@ if ! command -v zig &> /dev/null; then
     exit 1
 fi
 
-# Build kernel as ELF for QEMU
+# Build kernel as ELF for QEMU (bare-metal freestanding)
 echo -e "${GREEN}Building kernel for QEMU...${NC}"
-zig build -Dtarget=x86_64-linux-gnu -Doptimize=Release || {
+zig build qemu-bin -Doptimize=ReleaseSmall || {
     echo -e "${RED}Build failed${NC}"
     exit 1
 }
+# Resolve kernel binary (bare-metal vs hosted fallback)
+KERNEL_BIN="zig-out/bin/kernel-baremetal"
+if [ ! -f "$KERNEL_BIN" ]; then
+    KERNEL_BIN="zig-out/bin/zig-kernel"
+fi
 
 # Create initramfs if not exists
 if [ ! -f initramfs.cpio ]; then
@@ -70,7 +75,7 @@ echo "========================================"
 
 # Launch QEMU with serial monitor
 qemu-system-x86_64 \
-    -kernel zig-out/bin/zig-kernel \
+    -kernel "$KERNEL_BIN" \
     -initrd initramfs.cpio \
     -append "console=ttyS0 loglevel=8" \
     -nographic \

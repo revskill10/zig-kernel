@@ -39,7 +39,7 @@ QEMU_BIN=$(detect_qemu)
 # Build for QEMU
 build_qemu() {
     echo -e "${YELLOW}Building kernel for QEMU...${NC}"
-    zig build -Dtarget=x86_64-linux-gnu -Doptimize=Release 2>&1 || {
+    zig build qemu-bin -Doptimize=ReleaseSmall 2>&1 || zig build -Doptimize=ReleaseSmall 2>&1 || {
         echo -e "${RED}Build failed${NC}"
         return 1
     }

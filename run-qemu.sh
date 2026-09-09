@@ -35,12 +35,12 @@ if ! command -v "$TARGET-gcc" &> /dev/null; then
     exit 0
 fi
 
-# Build kernel for target
+# Build kernel for target (bare-metal freestanding)
 echo "Building kernel..."
 cd "$KERNEL_DIR"
 
-# Create bare-metal build
-zig build -Dtarget="$ARCH-linux-gnu" -Doptimize=ReleaseFast
+# Bare-metal via qemu-bin step (ignores -Dtarget, uses freestanding x86)
+zig build qemu-bin -Doptimize=ReleaseSmall || zig build -Doptimize=ReleaseSmall
 
 # Find the kernel binary
 KERNEL_BIN="$KERNEL_DIR/zig-out/bin/zig-kernel"

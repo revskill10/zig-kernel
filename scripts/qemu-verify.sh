@@ -24,8 +24,8 @@ ZIGCODE
 
 # Create bare-metal build
 echo "Building kernel for QEMU..."
-zig build -Dtarget=x86_64-freestanding-none -Doptimize=ReleaseSafe 2>/dev/null || {
-    echo "Note: Cross-compilation requires x86_64-linux-none target"
+zig build qemu-bin -Doptimize=ReleaseSafe 2>/dev/null || {
+    echo "Note: Cross-compilation requires x86_64 freestanding target"
     echo "Using hosted simulation instead..."
     zig build run
     exit 0
