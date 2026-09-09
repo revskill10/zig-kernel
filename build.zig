@@ -25,7 +25,6 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     // Bare-metal build for QEMU verification (freestanding x86_32, loaded at 0x100000)
-    const bare_optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseSmall });
     const bare_target_query: std.Target.Query = .{
         .cpu_arch = .x86,
         .os_tag = .freestanding,
@@ -36,7 +35,7 @@ pub fn build(b: *std.Build) void {
     const bare_exe_mod = b.createModule(.{
         .root_source_file = b.path("src/baremetal.zig"),
         .target = bare_target,
-        .optimize = bare_optimize,
+        .optimize = .ReleaseSmall,
     });
 
     const bare_exe = b.addExecutable(.{
@@ -45,10 +44,10 @@ pub fn build(b: *std.Build) void {
     });
 
     bare_exe.setLinkerScript(b.path("linker.ld"));
+    b.installArtifact(bare_exe);
 
-    const bare_install = b.addInstallArtifact(bare_exe, .{});
     const qemu_bin_step = b.step("qemu-bin", "Build bare-metal kernel ELF for QEMU");
-    qemu_bin_step.dependOn(&bare_install.step);
+    qemu_bin_step.dependOn(b.getInstallStep());
 
     // Test step
     const test_mod = b.createModule(.{
