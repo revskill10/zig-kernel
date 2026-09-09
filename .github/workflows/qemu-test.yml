@@ -25,9 +25,12 @@ jobs:
 
       - name: Hosted build and test
         run: |
-          zig build test 2>&1 | tee hosted-test-output.log
-          # Check all 7 tests pass
-          grep -q "1 passed" hosted-test-output.log || exit 1
+          zig test 2>&1 | tee hosted-test-output.log
+          # Check that all tests passed
+          if ! grep -q "All.*tests passed" hosted-test-output.log; then
+            echo "Tests failed"
+            exit 1
+          fi
 
       - name: Build QEMU ELF
         run: zig build elf

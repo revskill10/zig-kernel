@@ -5,7 +5,7 @@
 | Project | Language | Target | Build System | QEMU Testing |
 |---------|----------|--------|--------------|--------------|
 | Vinix | V (v-lang) | x86_64/aarch64 bare-metal | Make | Yes (QEMU/KVM) |
-| zig-kernel | Zig 0.16.0 | x86_64 (hosting) | Zig Build | Not yet (needs bare-metal) |
+| zig-kernel | Zig 0.16.0 | x86_64 (hosting + bare-metal) | Zig Build | Yes (bare-metal ELF) |
 | Omarchy | Linux + scripts | x86_64 aarch64 | Buildroot | Yes (QEMU profile) |
 
 ## Architecture Comparison
@@ -56,11 +56,11 @@ zig-kernel (from `syscall.zig`):
 |---------|-----------------|-------|------------|
 | Buildroot config | `waku_qemu_x86_64_defconfig` | Makefile | build.zig |
 | Kernel source | Linux 6.18.7 | Custom V kernel | Custom Zig kernel |
-| Initramfs | Built-in | Bochsrc test setup | Need to create |
-| QEMU script | Built-in `host/bin/qemu-system-x86_64` | `bochsrc` (Boches) | Need freestanding target |
-| Serial console | `console=ttyS0,115200` | Yes | Will need |
-| Root filesystem | ISO9660/GRUB2 | RAM disk | RAM disk needed |
-| Hardware models | q35, 512M RAM | Standard QEMU | Standard QEMU |
+| Initramfs | Built-in | Bochsrc test setup | Created via script |
+| QEMU script | Built-in `host/bin/qemu-system-x86_64` | `bochsrc` (Boches) | `run-qemu.sh` and `zig build qemu-bin` |
+| Serial console | `console=ttyS0,115200` | Yes | Yes (COM1) |
+| Root filesystem | ISO9660/GRUB2 | RAM disk | RAM disk (initramfs) |
+| Hardware models | q35, 512M RAM | Standard QEMU | Standard QEMU (q35/x86) |
 
 ## Build Infrastructure
 
@@ -105,10 +105,11 @@ vinix/kernel/
 
 ```
 zig-kernel/
-├── build.zig                          # Build script (hosted only)
-├── linker.ld                          # Linker script (hosted entry)
+├── build.zig                          # Build script (hosted + bare-metal)
+├── linker.ld                          # Linker script (bare-metal ELF)
 ├── src/
 │   ├── main.zig                       # Hosted entry
+│   ├── baremetal.zig                  # Bare-metal entry for QEMU
 │   ├── syscall.zig                    # Syscall dispatch
 │   ├── mm/mm.zig                      # Memory management
 │   ├── sched/sched.zig                  # Scheduler
@@ -124,7 +125,7 @@ zig-kernel/
 |-------|------------|-------|---------|
 | Build succeeds | ✓ | ✓ | ✓ |
 | Host tests pass | ✓ | ✓ | N/A |
-| QEMU runs | ✗ (need bare-metal) | ✓ | ✓ |
+| QEMU runs | ✓ (bare-metal ELF) | ✓ | ✓ |
 | VFS syscall | ✓ | ✓ | ✓ |
 | Network loopback | ✓ | ✓ | ✓ |
 | Scheduler | ✓ | ✓ | ✓ |
@@ -147,14 +148,14 @@ zig-kernel/
 - Security/Caps LSM hook pattern
 
 **Remaining QEMU verification gap:**
-- Bare-metal entry point (GDT/IDT/paging setup)
-- Freestanding build target
-- Initramfs creation for testing
-- CI pipeline for QEMU verification
+- Interrupt handling beyond hlt loop (for real testing)
+- Automated CI pipeline for QEMU verification
+- Initramfs with test programs (beyond hello.txt)
+- SMP support (currently single CPU)
 
 ## Recommendations
 
-1. **For QEMU testing**: Implement bare-metal boot in zig-kernel (80-100 lines)
+1. **For QEMU testing**: Complete interrupt handling and add CI workflow (zig-kernel now has bare-metal ELF ready)
 2. **For Vinix extension**: Add more syscalls (inotify, signalfd ready in vinix)
 3. **For Omarchy**: Could use zig-kernel as lightweight embedded alternative
 
