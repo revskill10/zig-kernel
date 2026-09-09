@@ -4,9 +4,11 @@ ENTRY(_start)
 SECTIONS
 {
   . = 0x100000;
-  .multiboot : { *(.multiboot) }
+  .multiboot : { KEEP(*(.multiboot)) }
   .text : { *(.text*) }
   .rodata : { *(.rodata*) }
   .data : { *(.data*) }
   .bss : { *(.bss*) *(COMMON) }
+  .note : { KEEP(*(.note*)) }
+  /DISCARD/ : { *(.eh_frame) *(.comment) }
 }
