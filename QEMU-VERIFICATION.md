@@ -154,7 +154,7 @@ Compared to hosted simulation, bare-metal adds:
 - [x] Hosted simulation build and test working
 - [x] Bare-metal build target defined in build.zig
 - [x] Linker script updated for bare-metal ELF
-- [x] Bare-metal entry point `_start_baremetal` exported (now `_start`)
+- [x] Bare-metal entry point `_start` exported
 - [x] Serial infrastructure implemented in `baremetal.zig`
 - [x] ELF binary verification completed
 - [ ] QEMU launch script tested (requires QEMU install)
