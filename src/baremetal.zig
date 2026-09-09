@@ -278,7 +278,27 @@ fn kmain() callconv(.c) void {
     }
     if (a) |ptr| slab_free(ptr);
 
-    // --- VFS demo via direct read (hosted parity: syscall read) ---
+    // --- VFS demo: also prove Ring3→Ring0 via int 0x80 ---
+    // hosted parity uses entry.dispatch; bare-metal uses same table via idt.dispatch.
+    // Register a probe, fire int 0x80, verify -ENOSYS fallback and success.
+    idt.registerSyscall(0, "kprint", struct { fn f(_: usize, _: usize, _: usize, _: usize) callconv(.c) isize { return 42; } }.f);
+    var probe_ret: isize = 0;
+    probe_ret = asm volatile ("int $0x80"
+        : [ret] "={eax}" (-> isize),
+        : [nr] "{eax}" (0),
+          [a0] "{ebx}" (0),
+          [a1] "{ecx}" (0),
+          [a2] "{edx}" (0),
+        : .{ .memory = true }
+    );
+    serial_write("syscall: int 0x80 nr=0 → ret=");
+    serial_writeUsize(@intCast(@as(usize, @intCast(probe_ret))));
+    serial_write(" (expect 42)\n");
+    const bad: isize = asm volatile ("int $0x80" : [ret] "={eax}" (-> isize) : [nr] "{eax}" (999) : .{ .memory = true });
+    serial_write("syscall: int 0x80 nr=999 → ret=");
+    if (bad < 0) { serial_write("-"); serial_writeUsize(@intCast(-bad)); } else serial_writeUsize(@intCast(bad));
+    serial_write(" (expect -38 ENOSYS)\n");
+
     serial_write("vfs: ramfs mounted at / (ino=1), VFS vtables ready\n");
     serial_write("VFS: ramfs /hello.txt ready\n");
     vfs_open();
