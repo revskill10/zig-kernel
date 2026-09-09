@@ -68,8 +68,8 @@ jobs:
           set -e
           make dist
           ls -lh dist/
-          sha256sum -c dist/SHA256SUMS
-          file dist/*.tar.gz
+          (cd dist && sha256sum -c SHA256SUMS)
+          file dist/*.tar.*
 
       - name: Verify kernel binary
         run: |
