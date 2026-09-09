@@ -356,7 +356,7 @@ test "net: AF_UNIX socketpair loopback" {
 }
 
 // ── Bare-metal entry stub (hosted build still exports for completeness) ──
-fn _start_baremetal_fallback() noreturn {
+fn _start_baremetal_fallback() callconv(.c) noreturn {
     main() catch {
         while (true) {
             asm volatile ("hlt");
