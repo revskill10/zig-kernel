@@ -2,8 +2,8 @@
 
 ## Overview
 
-This guide explains how to verify zig-kernel using QEMU virtualization. 
-zig-kernel now includes a **bare-metal build target** that produces a 32-bit ELF executable 
+This guide explains how to verify zig-kernel using QEMU virtualization.
+zig-kernel now includes a **bare-metal build target** that produces a 32-bit ELF executable
 suitable for loading via QEMU's `-kernel` option (direct boot, no bootloader required).
 
 ## Current State
@@ -132,10 +132,8 @@ Compared to hosted simulation, bare-metal adds:
 
 - [x] `zig build qemu-bin` compiles successfully
 - [x] ELF binary produced and verified (32-bit LSB executable)
-- [x] ELF magic number verified: 7F454C46
 - [x] Entry point matches linker script (_start at 0x100034)
-- [x] Serial initialization code present in baremetal.zig
-- [x] Bare-metal entry point `_start` exported with correct callconv(.naked)
+- [x] Serial initialization code present
 - [ ] QEMU boot test (requires QEMU installation)
 - [ ] Serial output capture in QEMU
 - [ ] VFS test: `/hello.txt` readable via syscall
@@ -156,11 +154,22 @@ Compared to hosted simulation, bare-metal adds:
 - [x] Hosted simulation build and test working
 - [x] Bare-metal build target defined in build.zig
 - [x] Linker script updated for bare-metal ELF
-- [x] Bare-metal entry point `_start` exported
+- [x] Bare-metal entry point `_start_baremetal` exported (now `_start`)
 - [x] Serial infrastructure implemented in `baremetal.zig`
 - [x] ELF binary verification completed
 - [ ] QEMU launch script tested (requires QEMU install)
 - [ ] Initial QEMU boot testing pending
 
-**Note**: The bare-metal build and ELF verification are complete. 
+**Note**: The bare-metal build and ELF verification are complete.
 QEMU testing is pending QEMU installation on the host system.
+
+## Installing QEMU
+
+On Windows, you can install QEMU via:
+- Chocolatey: `choco install qemu`
+- Or download from https://www.qemu.org/download/
+
+On Linux (Ubuntu/Debian): `sudo apt install qemu-system-x86`
+On macOS (Homebrew): `brew install qemu`
+
+After installation, re-run the verification steps.

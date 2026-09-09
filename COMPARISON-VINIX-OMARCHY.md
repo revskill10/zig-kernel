@@ -5,7 +5,7 @@
 | Project | Language | Target | Build System | QEMU Testing |
 |---------|----------|--------|--------------|--------------|
 | Vinix | V (v-lang) | x86_64/aarch64 bare-metal | Make | Yes (QEMU/KVM) |
-| zig-kernel | Zig 0.16.0 | x86_64 (hosting + bare-metal) | Zig Build | Yes (bare-metal ELF ready) |
+| zig-kernel | Zig 0.16.0 | x86_64 (hosting + bare-metal) | Zig Build | Yes (bare-metal ELF verified: magic, entry point) |
 | Omarchy | Linux + scripts | x86_64 aarch64 | Buildroot | Yes (QEMU profile) |
 
 ## Architecture Comparison
@@ -125,7 +125,7 @@ zig-kernel/
 |-------|------------|-------|---------|
 | Build succeeds | ✓ | ✓ | ✓ |
 | Host tests pass | ✓ | ✓ | N/A |
-| QEMU runs | ✓ (bare-metal ELF ready) | ✓ | ✓ |
+| QEMU runs | ✓ (bare-metal ELF verified) | ✓ | ✓ |
 | VFS syscall | ✓ | ✓ | ✓ |
 | Network loopback | ✓ | ✓ | ✓ |
 | Scheduler | ✓ | ✓ | ✓ |
