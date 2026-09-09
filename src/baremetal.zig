@@ -222,6 +222,13 @@ fn net_recv(buf: []u8) usize {
 export fn _start() callconv(.naked) noreturn {
     asm volatile (
         \\ cli
+        \\ mov %cr0, %eax
+        \\ and $0xfffffffb, %eax
+        \\ or $0x2, %eax
+        \\ mov %eax, %cr0
+        \\ mov %cr4, %eax
+        \\ or $0x600, %eax
+        \\ mov %eax, %cr4
         \\ mov $0x90000, %esp
         \\ call %[kmain:P]
         \\ 1: hlt
