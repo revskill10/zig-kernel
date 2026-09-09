@@ -132,8 +132,10 @@ Compared to hosted simulation, bare-metal adds:
 
 - [x] `zig build qemu-bin` compiles successfully
 - [x] ELF binary produced and verified (32-bit LSB executable)
+- [x] ELF magic number verified: 7F454C46
 - [x] Entry point matches linker script (_start at 0x100034)
-- [x] Serial initialization code present
+- [x] Serial initialization code present in baremetal.zig
+- [x] Bare-metal entry point `_start` exported with correct callconv(.naked)
 - [ ] QEMU boot test (requires QEMU installation)
 - [ ] Serial output capture in QEMU
 - [ ] VFS test: `/hello.txt` readable via syscall
