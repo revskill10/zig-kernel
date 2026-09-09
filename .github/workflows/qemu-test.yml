@@ -19,11 +19,9 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-system-aarch64 build-essential cpio
 
       - name: Install Zig 0.16.0
-        run: |
-          curl -L https://ziglang.org/download/0.16.0/zig-linux-x86_64-0.16.0.tar.xz | tar xJ
-          sudo cp zig-linux-x86_64-0.16.0/zig /usr/local/bin/
-          rm -rf zig-linux-x86_64-0.16.0
-        shell: bash
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
 
       - name: Hosted build and test
         run: |
