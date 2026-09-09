@@ -37,7 +37,8 @@ jobs:
           file zig-out/bin/kernel-baremetal
           test -f zig-out/bin/kernel-baremetal
           # entry must be 0x100000 region (multiboot/PVH at 0x100000)
-          readelf -h zig-out/bin/kernel-baremetal | grep -q "Entry point address: 0x10"
+          # readelf aligns with multiple spaces: "Entry point address:               0x10xxxx"
+          readelf -h zig-out/bin/kernel-baremetal | grep -Eq "Entry point address:\s+0x10"
           echo "ELF ok"
 
       - name: Create initramfs
