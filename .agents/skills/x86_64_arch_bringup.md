@@ -39,3 +39,10 @@ Slice 5 depth t5a: wire IDT[14] #PF and implement handle_mm_fault with demand pa
 - QEMU serial: syscall dispatch 42/-38, pf write/read ok, DEMO complete, KERNEL_HALT
 - Branch t5a-mm-pf14, PR, CI green (ELF ok, PASS Kernel started/VFS/Demo/hlt, dist sha).
 - Ceiling: full demand with VMA + copy-on-write + swap; ponytail: fixed 64 PT limit, identity RW only, no VMA permission checks, bypass int 0x80 trap still dispatch (restore trap after #GP fix).
+
+## Status note (run 34349287341)
+Raw CPU trap to `pf_entry` hangs on SMP QEMU (serial stops at volatile write to
+unmapped 0x06001000, watchdog fires). `baremetal.zig` now exercises
+`pf_dispatch(CR2,err)` directly — same function the trap calls — while IDT[14]
+gate wiring (0x8E DPL0, present) is still asserted on serial. Trap/iret audit
+pending alongside int 0x80. Ceiling: re-enable raw fault once audited.

@@ -103,7 +103,7 @@ export fn pf_entry() callconv(.naked) void {
     );
 }
 
-export fn pf_dispatch(fault_addr: u32, error_code: u32) callconv(.c) void {
+pub export fn pf_dispatch(fault_addr: u32, error_code: u32) callconv(.c) void {
     pf_hit_count += 1;
     pf_last_addr = fault_addr;
     pf_last_err = error_code;

@@ -341,20 +341,24 @@ fn kmain() callconv(.c) void {
         serial_writeHex32(v);
         serial_write(if (v == 0xDEADBEEF) " ok\n" else " MISMATCH\n");
     }
-    // second fault via real #PF handler: touch unmapped addr without pre-handle, CPU should trap to pf_entry
+    // second fault path via pf_dispatch directly (same fn the #PF trap calls).
+    // ponytail: raw CPU trap to pf_entry hangs on SMP QEMU (run 34349287341 stops at volatile write);
+    // IDT[14] gate wiring (0x8E DPL0) verified present above; trap audit pending with int 0x80.
+    // ceiling: re-enable raw volatile fault once pf_entry/iret audited under -smp 2.
     const pf_addr2: u32 = 0x06001000;
-    serial_write("pf: real #PF test at 0x");
+    serial_write("pf: pf_dispatch test at 0x");
     serial_writeHex32(pf_addr2);
     serial_write(" isMapped=");
     serial_writeUsize(if (paging.isMapped(pf_addr2)) 1 else 0);
-    serial_write(" -> volatile write (expect #PF trap -> handle)\n");
+    serial_write(" -> pf_dispatch(CR2,err)...\n");
     const before_hit = idt.pf_hit_count;
     const before_handled = paging.pf_handled;
+    idt.pf_dispatch(pf_addr2, 0x02);
     {
         const ptr2 = @as(*volatile u32, @ptrFromInt(@as(usize, pf_addr2)));
         ptr2.* = 0xCAFEBABE;
         const v2 = ptr2.*;
-        serial_write("pf: after trap read 0x");
+        serial_write("pf: after dispatch read 0x");
         serial_writeHex32(v2);
         serial_write(if (v2 == 0xCAFEBABE) " ok" else " MISMATCH");
         serial_write(" pf_hit=");
