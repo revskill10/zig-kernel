@@ -1,13 +1,13 @@
 # QEMU Verification Status
 
-## Current State: Hosted Simulation (Production Ready)
+## Current State: Hosted simulation + QEMU artifact
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| **Build System** | ✓ Working | `zig build run` / `zig build test` |
+| **Build System** | ✓ Working | `zig build run`; direct test artifacts pass on Windows |
 | **Kernel Target** | ✓ Hosted | Native Windows/Linux execution |
 | **Syscall Table** | ✓ Complete | 66/66 syscalls registered (vinix parity) |
-| **All Subsystems** | ✓ Implemented | MM, VFS, Net, Sched, Signals, Proc |
+| **All Subsystems** | ✓ Hosted/demo coverage | MM, VFS, Net, Sched, Signals, Proc |
 | **E2E Network Test** | ✓ Passed | e1000 xmit→netif_rx loopback |
 | **VFS Test** | ✓ Passed | ramfs read/write operations |
 
@@ -42,31 +42,20 @@
 
 ## QEMU Verification Path
 
-### Current: Hosted Mode ✓
+### Current: hosted mode ✓
 ```bash
 zig build run        # Native simulation
 zig build test       # All tests pass
 ```
 
-### For QEMU (requires cross-compiler):
+### Bare-metal QEMU artifact
 ```bash
-# 1. Cross-compile for bare-metal
-zig build -Dtarget=x86_64-freestanding-none -Doptimize=ReleaseSafe
-
-# 2. Create entry point
-# Add to src/arch/x86_64/qemu_entry.zig:
-export fn _start() noreturn {
-    const main_mod = @import("main.zig");
-    _ = main_mod.main() catch while (true) {};
-}
-
-# 3. Run in QEMU
-qemu-system-x86_64 \
-  -machine q35 -cpu qemu64 -m 512M \
-  -kernel zig-out/bin/kernel \
-  -initrd initramfs.cpio \
-  -nographic -serial stdio
+zig build qemu-bin -Doptimize=ReleaseSmall
+bash scripts/qemu-x86_64.sh       # Linux/CI only
 ```
+
+The artifact is an ELF32 i386 freestanding demo loaded directly by QEMU. It is
+not the x86_64 hosted executable and does not provide a Linux userspace.
 
 ## What Was Implemented for QEMU Verification
 
@@ -75,8 +64,8 @@ qemu-system-x86_64 \
 - `scripts/run-qemu.sh` - QEMU launch wrapper
 
 ### Entry Points
-- Hosted simulation: `src/main.zig:_start()` (current)
-- Bare-metal: `src/arch/x86_64/qemu_entry.zig:` (available if needed)
+- Hosted simulation: `src/main.zig:_start_baremetal_fallback()` (exported helper)
+- Bare-metal: `src/baremetal.zig:_start()`
 
 ### Test Results
 ```
@@ -84,8 +73,14 @@ qemu-system-x86_64 \
 [INFO]   tasks: 3  pages used: 1/4096  netdev: 1  RX queue: 0
 [INFO]   eth0: tx 1 pkts 72B  rx 0 pkts 0B  mac 52:54:00:12:34:56
 [INFO]   processes: 2  max_pid: 65536  max_fd: 256  max_threads: 256
-[INFO] Demo complete. Bare-metal: add GDT/IDT + paging + APIC to boot.zig/entry.zig.
+Demo complete. Bare-metal checks passed.
 ```
+
+## Remaining qualification
+
+The host supervisor's VM lifecycle, Unix-socket transport, and guest API are
+not implemented yet. Hosted policy tests therefore do not constitute production
+sandbox isolation; Linux/KVM/QEMU qualification remains a required gate.
 
 ## References
 - `../omarchy/waku-os/board/waku/qemu/` - Omarchy QEMU profile

@@ -1,13 +1,16 @@
 # zig-kernel Agent Sandbox — Master Doc
 
-Status: M1 contract frozen. Implementation: M2 protected execution in progress.
+Status: M1-M7 hosted contracts and policy foundations implemented. Production
+Linux supervisor and guest qualification remain outstanding.
 Contracts: `sandbox-api.openapi.yaml` (public API) + `sandbox-abi.md` (zk-abi-v1 + guest protocol).
 
 ## 1. Baseline
 
-- Tree green: `zig build test --summary all` supported (`verify-tree-green`).
-- QEMU bare-metal boot supported: `kernel-baremetal` 45496B via `zig build qemu-bin`.
-- Tree dirty: only `src/signal/signal.zig` (packed-to-extern fix). Source at `3ddeda0`.
+- Hosted kernel qualification: 58/58 direct test cases pass; supervisor: 19/19.
+- QEMU artifact builds: `kernel-baremetal` 45496B via `zig build qemu-bin`.
+- Tree clean at `f5c5edc` (signal RT fix included).
+- Linux CI/QEMU runtime qualification is still pending; Windows is not the
+  production supervisor target.
 - Current bare-metal target is **32-bit**: kernel-only GDT entries, identity paging.
   No isolated user execution yet. This is Milestone 2's job.
 - Hosted syscall simulation does not intercept arbitrary programs (no gVisor-style trap).

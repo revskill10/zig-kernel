@@ -12,20 +12,23 @@
   - `docs/driver-implementation-summary.md` (this summary)
 
 ## Current Status
-- Hosted simulation: Fully functional (all demos pass, drivers verified)
-- Bare-metal QEMU verification: Pending due to inline assembly syntax issue in `src/baremetal.zig` (boot code)
-- The driver code itself is ready for verification; only the boot infrastructure needs fixing
+- Hosted simulation: functional; the direct kernel test artifact reports 58/58
+- Supervisor policy/API tests: the direct supervisor test artifact reports 19/19
+- Bare-metal QEMU artifact: builds as ELF32 i386 via `zig build qemu-bin`
+- Bare-metal QEMU runtime: pending Linux/CI verification; it is not claimed as
+  verified by the Windows development runner
+- The driver code is verified in hosted simulation; that does not establish
+  production hardware-driver or sandbox isolation guarantees
 
-## Next Steps for QEMU Verification
-1. Fix inline assembly in `src/arch/x86_64/boot_baremetal.zig` (GDT/IDT setup) or `src/baremetal.zig` (I/O functions)
-2. Build bare-metal ELF: `zig build qemu-bin`
-3. Verify ELF: `file zig-out/bin/kernel-baremetal`
-4. Run in QEMU: `./scripts/qemu-launch.sh` or `zig build qemu-run`
-5. Validate kernel boot and driver initialization via serial output
+## Next Steps for QEMU and production qualification
+1. Run the Linux CI serial gate: `bash scripts/qemu-x86_64.sh`
+2. Implement supervisor VM spawn/kill/reap and Unix-socket transport
+3. Implement the guest API/agent and run Linux/KVM qualification
 
 ## Confidence
 - **Driver Implementation**: High - based directly on Linux source, tested in hosted simulation
-- **QEMU Verification**: Medium - blocked by boot assembly issue, but drivers are ready
+- **QEMU artifact**: High - ELF builds and has a valid x86 entry point
+- **QEMU runtime / sandbox production readiness**: Pending Linux/CI and supervisor work
 
 ## Files Modified
 - `src/drivers/net/e1000.zig` - Enhanced e1000 driver

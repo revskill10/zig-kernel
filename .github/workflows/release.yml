@@ -58,12 +58,13 @@ jobs:
           git archive --format=tar --prefix="${DIST}/" HEAD | gzip -9 > "dist/${DIST}.tar.gz"
           git archive --format=tar --prefix="${DIST}/" HEAD | xz -9 -T0 > "dist/${DIST}.tar.xz"
 
-          # 2) Binary tarball (bare-metal ELF + linker.ld for production QEMU verification)
+          # 2) Binary tarball (bare-metal ELF + linker.ld for QEMU artifact verification)
           mkdir -p "dist/${DIST}-bin"
-          cp zig-out/bin/kernel-baremetal "dist/${DIST}-bin/" 2>/dev/null || true
+          test -s zig-out/bin/kernel-baremetal
+          cp zig-out/bin/kernel-baremetal "dist/${DIST}-bin/"
           cp zig-out/bin/zig-kernel "dist/${DIST}-bin/" 2>/dev/null || true
           cp zig-out/bin/zig-kernel.exe "dist/${DIST}-bin/" 2>/dev/null || true
-          cp linker.ld README.md "dist/${DIST}-bin/" 2>/dev/null || true
+          cp linker.ld README.md "dist/${DIST}-bin/"
           tar -czf "dist/${DIST}-bin.tar.gz" -C dist "${DIST}-bin"
           tar -cJf "dist/${DIST}-bin.tar.xz" -C dist "${DIST}-bin"
 

@@ -101,15 +101,17 @@ This matches the vinix and Omarchy architecture patterns while providing actual 
 
 ## 🔄 QEMU VERIFICATION STATUS
 
-**Current State**: Hosted simulation (native executable) - **WORKING**
-**QEMU Target**: Bare-metal ELF build available via `zig build qemu-bin` - **BUILD READY**
-**Blocker**: Inline assembly syntax in baremetal.zig (Zig 0.16.0 compatibility issue)
+**Current State**: Hosted simulation and policy tests are working. The direct
+kernel test artifact reports 58/58 and the supervisor artifact reports 19/19.
+**QEMU Target**: `zig build qemu-bin` produces an ELF32 i386 freestanding demo
+with entry `0x10000c`.
+**Runtime status**: QEMU boot is a Linux/CI qualification gate and has not been
+claimed as locally verified on Windows.
 
-**Next Steps for QEMU Verification** (when assembly issue resolved):
-1. Fix baremetal.zig inline assembly syntax
-2. Build ELF: `zig build qemu-bin`
-3. Verify: `file zig-out/bin/kernel-baremetal` (should be ELF 32-bit LSB)
-4. Run in QEMU: `qemu-system-x86_64 -kernel zig-out/bin/kernel-baremetal -nographic -serial mon:stdio -no-reboot`
+**Next Steps for production sandbox qualification**:
+1. Run the Linux CI QEMU serial gate.
+2. Implement and qualify supervisor VM spawn/kill/reap and Unix-socket transport.
+3. Implement the guest API/agent and run the Linux/KVM adversarial suite.
 
 ## 📁 FILES CREATED/MODIFIED
 
@@ -123,20 +125,23 @@ This matches the vinix and Omarchy architecture patterns while providing actual 
 8. `linker.ld` - Updated for bare-metal ELF
 9. `src/baremetal.zig` - Minimal bare-metal entry point (WIP)
 
-## 🎯 CONFIDENCE LEVEL: HIGH
+## 🎯 CONFIDENCE LEVEL: SCOPED
 
 The drivers are:
 - ✅ Based directly on Linux kernel source
 - ✅ Tested in hosted simulation with working network loopback
 - ✅ Following the same architecture as vinix/Omarchy
-- ✅ Ready for QEMU verification once build issue resolved
+- ✅ QEMU artifact builds and is ready for the Linux runtime gate
+- ⚠️ Hosted policy tests are not production sandbox isolation
 - ✅ Documented with reference to Linux source files
 
 ## 🏁 CONCLUSION
 
 The core objective has been successfully met: **real hardware drivers have been implemented in zig-kernel from Linux source**. The e1000 and virtio-net drivers are fully functional in the hosted simulation environment, demonstrating the complete driver stack from PCI probe → BAR/MMIO → descriptor rings → DMA → interrupts → net_device_ops → network stack.
 
-The remaining work to enable full QEMU bare-metal verification is limited to fixing the inline assembly syntax in the minimal bare-metal entry point, which does not affect the driver implementations themselves.
+The remaining work for production sandbox use is not limited to boot assembly:
+the host lifecycle, transport, guest agent, and Linux/KVM qualification still
+need implementation and verification.
 
 ---
 *Task completed: 2026-09-09*
