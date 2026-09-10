@@ -66,8 +66,10 @@ pub fn getPTE(vaddr: usize) u32 {
 }
 
 // handle_mm_fault: Linux-like, called from #PF handler with CR2 fault addr + error code.
-// error_code bits: 0=P,1=W,2=U,3=RSVD,4=I. We honor U to set user bit.
-// Returns 0 on success, -12 ENOMEM if pd out of range, -14 EFAULT if bogus.
+// error_code bits: 0=P,1=W,2=U,3=RSVD,4=I.
+// Bring-up policy: kernel-only, no user tasks yet. Supervisor faults get identity RW.
+// User-origin faults (U set) are REJECTED with -13 EACCES, install nothing (Qodo #2).
+// Returns 0 ok, -12 ENOMEM out of window, -13 EACCES user fault, -14 EFAULT bogus.
 // ponytail: fixed 64 PT identity RW only, no VMA permission checks, no swap/COW. ceiling: VMA + perms + alloc frame via buddy.
 pub fn handle_mm_fault(fault_addr: u32, error_code: u32) isize {
     const pd: usize = @as(usize, @intCast(fault_addr >> 22));
@@ -77,14 +79,14 @@ pub fn handle_mm_fault(fault_addr: u32, error_code: u32) isize {
     if (pd >= MAX_PT) return -12;
     if (pd >= 1024) return -14;
 
-    const user_bit: u32 = if ((error_code & 0x4) != 0) 0x4 else 0;
+    if ((error_code & 0x4) != 0) return -13; // -EACCES: no user mappings in bring-up
 
     if ((page_directory[pd] & 0x1) == 0) {
-        page_directory[pd] = @as(u32, @truncate(@intFromPtr(&page_tables[pd][0]) & 0xFFFFF000)) | 0x3 | user_bit;
+        page_directory[pd] = @as(u32, @truncate(@intFromPtr(&page_tables[pd][0]) & 0xFFFFF000)) | 0x3;
     }
     const pte = &page_tables[pd][pt];
     if ((pte.* & 0x1) == 0) {
-        pte.* = frame | 0x3 | user_bit;
+        pte.* = frame | 0x3;
     } else {
         pte.* |= 0x2;
     }
@@ -108,6 +110,15 @@ test "paging: handle_mm_fault maps unmapped page" {
     const rc2 = handle_mm_fault(addr1, 0x2);
     try std.testing.expect(rc2 == 0);
     try std.testing.expect(pf_handled == before + 2);
+}
+
+test "paging: handle_mm_fault rejects user fault" {
+    paging_init();
+    const before = pf_handled;
+    const rc = handle_mm_fault(0x05000000, 0x6); // U|W user-origin write fault
+    try std.testing.expect(rc == -13);
+    try std.testing.expect(!isMapped(0x05000000));
+    try std.testing.expect(pf_handled == before); // no mapping installed, no count
 }
 
 test "paging: handle_mm_fault out of range" {

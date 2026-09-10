@@ -103,11 +103,14 @@ export fn pf_entry() callconv(.naked) void {
     );
 }
 
-pub export fn pf_dispatch(fault_addr: u32, error_code: u32) callconv(.c) void {
+// Returns 0 ok, <0 fatal (caller must NOT resume faulting insn; ponytail: no
+// halt/panic path yet since raw CPU trap is unaudited and unused — ceiling
+// when trap audit lands with int 0x80). Qodo #1.
+pub export fn pf_dispatch(fault_addr: u32, error_code: u32) callconv(.c) isize {
     pf_hit_count += 1;
     pf_last_addr = fault_addr;
     pf_last_err = error_code;
-    _ = paging.handle_mm_fault(fault_addr, error_code);
+    return paging.handle_mm_fault(fault_addr, error_code);
 }
 
 pub fn idt_init() void {

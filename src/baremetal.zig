@@ -353,7 +353,16 @@ fn kmain() callconv(.c) void {
     serial_write(" -> pf_dispatch(CR2,err)...\n");
     const before_hit = idt.pf_hit_count;
     const before_handled = paging.pf_handled;
-    idt.pf_dispatch(pf_addr2, 0x02);
+    const pf_rc2 = idt.pf_dispatch(pf_addr2, 0x02); // 0 ok; <0 fatal, never resume faulting insn (Qodo #1)
+    serial_write("pf: pf_dispatch rc=");
+    if (pf_rc2 < 0) {
+        serial_write("-");
+        serial_writeUsize(@intCast(-pf_rc2));
+        serial_write(" (FATAL)\n");
+    } else {
+        serial_writeUsize(@intCast(pf_rc2));
+        serial_write(" (ok, mapped)\n");
+    }
     {
         const ptr2 = @as(*volatile u32, @ptrFromInt(@as(usize, pf_addr2)));
         ptr2.* = 0xCAFEBABE;
