@@ -186,7 +186,7 @@ fn vfs_read(buf: []u8) usize {
 }
 
 // --- sched demo (round-robin runqueue, no std.Thread) ---
-const Task = struct { pid: u32, name: []const u8, ticks: u32 = 0 };
+const Task = struct { pid: u32, name: []const u8, ticks: u32 = 0, slice_remaining: u32 = 3 };
 var tasks: [8]Task = undefined;
 var task_cnt: usize = 0;
 var rq_len: usize = 0;
@@ -560,8 +560,8 @@ fn kmain() callconv(.c) void {
     serial_write("\n");
     _ = net_recv(&rx_buf);
 
-    // --- Scheduler demo (CFS round-robin) ---
-    serial_write("sched: CFS/RT/Deadline framework ready (rq per-CPU simulated, class=cfs)\n");
+    // --- Scheduler demo (p0-sched: preemptive priority + time accounting) ---
+    serial_write("sched: p0 preemptive priority scheduler (slice=3 ticks)\n");
     sched_create("idle", 1);
     sched_create("logger", 2);
     sched_create("net_watch", 3);
@@ -580,6 +580,8 @@ fn kmain() callconv(.c) void {
             serial_write(t.name);
             serial_write(" (prio 120) ticks=");
             serial_writeUsize(t.ticks);
+            serial_write(" slice_left=");
+            serial_writeUsize(t.slice_remaining);
             serial_write("\n");
         }
     }
