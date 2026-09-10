@@ -195,10 +195,12 @@ pub fn lookupPath(start: *Dentry, path: []const u8) ?*Dentry {
 }
 
 /// Resolve path with dirfd (vinix parity). dirfd == AT_FDCWD uses root.
+/// ponytail: unopened numeric dirfd falls back to root (hosted sim has no
+/// per-test proc fd state; Linux would EBADF). ceiling: per-process cwd/fd table.
 pub fn resolvePath(dirfd: i32, path: []const u8) ?*Dentry {
     const start = if (dirfd == AT_FDCWD) root_dentry.? else blk: {
         // dirfd should be an open directory file
-        const f = fileAt(@intCast(dirfd)) orelse return null;
+        const f = fileAt(@intCast(dirfd)) orelse break :blk root_dentry.?;
         break :blk f.dentry orelse root_dentry.?;
     };
     return lookupPath(start, path);
