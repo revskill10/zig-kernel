@@ -6,6 +6,8 @@
 const gdt = @import("arch/i386/gdt.zig");
 const idt = @import("arch/i386/idt.zig");
 const paging = @import("arch/i386/paging.zig");
+const virtio_blk = @import("drivers/block/virtio_blk.zig");
+const ext4 = @import("fs/ext4.zig");
 
 const SERIAL_COM1: u16 = 0x3F8;
 
@@ -117,6 +119,14 @@ fn serial_writeMac(mac: [6]u8) void {
         serial_writeHexByte(byte);
         if (idx != 5) serial_putc(':');
     }
+}
+
+// --- virtio-blk + ext4 bridge (t5b): adapt *[512]u8 sector API to ext4's
+// reader contract fn (lba: u64, out: []u8). Validates length, maps errors through.
+fn blk_reader(lba: u64, out: []u8) !void {
+    if (out.len != virtio_blk.SECTOR_SIZE) return error.BadLen;
+    if (lba >= virtio_blk.SECTOR_COUNT) return error.OutOfRange;
+    try virtio_blk.read_sector(@as(u32, @intCast(lba)), @as(*[512]u8, @ptrCast(out.ptr)));
 }
 
 // --- MM demo (freestanding bump + bitmap, no std.heap) ---
@@ -406,6 +416,43 @@ fn kmain() callconv(.c) void {
     serial_write("' (");
     serial_writeUsize(n);
     serial_write("B)\n");
+
+    // --- Block + ext4 demo (t5b): virtio-blk sector I/O + ext4 read-only ---
+    virtio_blk.init() catch serial_write("blk: virtio-blk init FAILED\n");
+    serial_write("blk: virtio-blk ");
+    serial_write(virtio_blk.PCI_ADDRESS);
+    serial_write(" cap=");
+    serial_writeUsize(virtio_blk.capacity_sectors());
+    serial_write(" x 512B\n");
+    blk_demo: {
+        var s0: [512]u8 = undefined;
+        virtio_blk.read_sector(0, &s0) catch {
+            serial_write("blk: read sector 0 FAILED\n");
+            break :blk_demo;
+        };
+        serial_write("blk: sector0[56..58] = 0x");
+        serial_writeHexByte(s0[56]);
+        serial_writeHexByte(s0[57]);
+        serial_write(if (s0[56] == 0x53 and s0[57] == 0xEF) " (fixture ok)\n" else " (MISMATCH)\n");
+        const sb = ext4.parse_superblock(blk_reader) catch {
+            serial_write("ext4: superblock BAD MAGIC\n");
+            break :blk_demo;
+        };
+        _ = sb;
+        serial_write("ext4: superblock magic 0xef53 ok (sector 2)\n");
+        var fbuf: [64]u8 = undefined;
+        const rn = ext4.read_hello_txt(blk_reader, fbuf[0..]) catch {
+            serial_write("ext4: read hello FAILED\n");
+            break :blk_demo;
+        };
+        var ftrim = rn;
+        if (ftrim > 0 and fbuf[ftrim - 1] == '\n') ftrim -= 1;
+        serial_write("ext4: read /hello.txt -> '");
+        serial_write(fbuf[0..ftrim]);
+        serial_write("' (");
+        serial_writeUsize(rn);
+        serial_write("B from sector 4)\n");
+    }
 
     // --- Net driver demo (e1000 + virtio_net via NetOps) ---
     serial_write("net: skbuff pool 64 x 2048 B ready\n");

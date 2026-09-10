@@ -30,6 +30,8 @@ const syscall = @import("syscall.zig");
 const caps = @import("security/caps.zig");
 const e1000 = @import("drivers/net/e1000.zig");
 const virtio_net = @import("drivers/net/virtio_net.zig");
+const virtio_blk = @import("drivers/block/virtio_blk.zig");
+const ext4 = @import("fs/ext4.zig");
 const proc_mod = @import("proc/proc.zig");
 const time_mod = @import("time/time.zig");
 const stat_mod = @import("stat/stat.zig");
@@ -92,6 +94,7 @@ pub fn main() !void {
     // virtio_net (paravirtual) — analog: drivers/net/virtio_net.c + drivers/virtio/virtio_mmio.c
     try e1000.init();
     try virtio_net.init();
+    try virtio_blk.init();
 
     // ── 5. Tasks (Process Management) ──
     _ = sched.create("idle", taskIdle);
@@ -147,6 +150,28 @@ pub fn main() !void {
             try netdev.transmit(dev, skb);
             printk.printk(.info, "virtio_net: direct xmit 11B → net_core queue={d}", .{net_core.queueLen()});
         }
+    }
+
+    // t5b: virtio-blk + ext4 read-only demo (real sector I/O, not banner)
+    printk.printk(.info, "-- Block demo (virtio-blk sector I/O -> ext4 read-only) --", .{});
+    {
+        const S = struct {
+            fn read(lba: u64, out: []u8) !void {
+                if (out.len != 512 or lba >= 64) return error.BadLen;
+                try virtio_blk.read_sector(@as(u32, @intCast(lba)), @as(*[512]u8, @ptrCast(out.ptr)));
+            }
+        };
+        const sb = ext4.parse_superblock(S.read) catch {
+            printk.printk(.err, "ext4: superblock BAD MAGIC", .{});
+            return;
+        };
+        printk.printk(.info, "blk: virtio-blk {s} cap={d}x512B; ext4 magic 0x{x} ok", .{ virtio_blk.PCI_ADDRESS, virtio_blk.capacity_sectors(), sb.magic });
+        var fbuf: [64]u8 = undefined;
+        const n = ext4.read_hello_txt(S.read, fbuf[0..]) catch {
+            printk.printk(.err, "ext4: read hello FAILED", .{});
+            return;
+        };
+        printk.printk(.info, "ext4: read /hello.txt '{s}' ({d}B from sector 4)", .{ fbuf[0..n], n });
     }
 
     printk.printk(.info, "-- Scheduler demo (__schedule → sched_class → context_switch) --", .{});
@@ -353,6 +378,44 @@ test "net: AF_UNIX socketpair loopback" {
     const recvd = try socket_mod.recv(pair[1], &buf);
     try std.testing.expect(recvd == msg.len);
     try std.testing.expectEqualSlices(u8, buf[0..recvd], msg);
+}
+
+test "blk: virtio-blk + ext4 integration" {
+    try virtio_blk.init();
+    const S = struct {
+        fn read(lba: u64, out: []u8) !void {
+            if (out.len != 512 or lba >= 64) return error.BadLen;
+            try virtio_blk.read_sector(@as(u32, @intCast(lba)), @as(*[512]u8, @ptrCast(out.ptr)));
+        }
+    };
+    const sb = try ext4.parse_superblock(S.read);
+    try std.testing.expectEqual(@as(u16, 0xEF53), sb.magic);
+    var out: [64]u8 = undefined;
+    const n = try ext4.read_hello_txt(S.read, out[0..]);
+    try std.testing.expectEqual(@as(usize, 33), n);
+    try std.testing.expectEqualStrings("Hello from Zig Linux VFS (ramfs)\n", out[0..n]);
+}
+
+test "blk: sector write/read roundtrip preserves ext4" {
+    try virtio_blk.init();
+    var orig: [512]u8 = undefined;
+    try virtio_blk.read_sector(63, &orig);
+    defer virtio_blk.write_sector(63, &orig) catch {};
+    var pat: [512]u8 = undefined;
+    for (&pat, 0..) |*b, i| b.* = @as(u8, @intCast(i % 251));
+    try virtio_blk.write_sector(63, &pat);
+    var got: [512]u8 = undefined;
+    try virtio_blk.read_sector(63, &got);
+    try std.testing.expectEqualSlices(u8, &pat, &got);
+    try std.testing.expectError(error.OutOfRange, virtio_blk.read_sector(64, &got));
+    const S = struct {
+        fn read(lba: u64, out: []u8) !void {
+            if (out.len != 512 or lba >= 64) return error.BadLen;
+            try virtio_blk.read_sector(@as(u32, @intCast(lba)), @as(*[512]u8, @ptrCast(out.ptr)));
+        }
+    };
+    const sb = try ext4.parse_superblock(S.read);
+    try std.testing.expectEqual(@as(u16, 0xEF53), sb.magic);
 }
 
 // ── Bare-metal entry stub (hosted build still exports for completeness) ──
