@@ -7,7 +7,9 @@ const pipe_mod = @import("../drivers/pipe.zig");
 pub const MAX_INODES: usize = 128;
 pub const MAX_DENTRIES: usize = 128;
 pub const MAX_OPEN_FILES: usize = 256;
+pub const MAX_MOUNTS: usize = 16;
 pub const FNAME_MAX: usize = 64;
+pub const DIRENT_RECLEN: usize = @sizeOf(stat_mod.Dirent);
 
 pub const SEEK_SET: i32 = 0;
 pub const SEEK_CUR: i32 = 1;
@@ -30,7 +32,7 @@ pub const Inode = struct {
     ftype: FileType,
     mode: u16 = 0o644,
     size: usize = 0,
-    data: ?[]u8 = null, // ramfs tmpfs data
+    data: ?[]u8 = null,
     ops: ?*const FileOps = null,
     is_dev: bool = false,
     dev_id: u64 = 0,
@@ -51,7 +53,7 @@ pub const Dentry = struct {
     name_len: usize = 0,
     inode: ?*Inode = null,
     parent: ?*Dentry = null,
-    children: [32]?*Dentry = [_]?*Dentry{null} ** 32, // Simple fixed-size child list
+    children: [32]?*Dentry = [_]?*Dentry{null} ** 32,
     child_count: usize = 0,
     symlink_target: ?[]const u8 = null,
     fn setName(self: *Dentry, n: []const u8) void {
@@ -72,12 +74,22 @@ pub const File = struct {
     pipe_read_end: bool = false,
 };
 
+// Mount table
+pub const MountEntry = struct {
+    target: []const u8 = "",
+    fs_type: []const u8 = "",
+    root_dentry: ?*Dentry = null,
+    flags: u32 = 0,
+};
+
 var inodes: [MAX_INODES]Inode = undefined;
 var dentries: [MAX_DENTRIES]Dentry = undefined;
 var inode_used: [MAX_INODES]bool = [_]bool{false} ** MAX_INODES;
 var dentry_used: [MAX_DENTRIES]bool = [_]bool{false} ** MAX_DENTRIES;
 var inode_next: u32 = 1;
 var root_dentry: ?*Dentry = null;
+var mounts: [MAX_MOUNTS]MountEntry = [_]MountEntry{.{}} ** MAX_MOUNTS;
+var mount_count: usize = 0;
 
 // Global open file table (shared across processes for hosted sim)
 var open_files: [MAX_OPEN_FILES]File = undefined;
@@ -90,9 +102,11 @@ pub fn init() void {
     for (&inodes) |*i| i.* = .{ .ino = 0, .ftype = .regular };
     for (&dentries) |*d| d.* = .{};
     for (&open_files) |*f| f.* = .{};
+    for (&mounts) |*m| m.* = .{};
     inode_next = 1;
     root_dentry = null;
     dev_count = 0;
+    mount_count = 0;
     root_dentry = allocDentry();
     const root_inode = allocInode(.directory) orelse unreachable;
     root_inode.mode = 0o755;
@@ -125,36 +139,74 @@ fn allocDentry() ?*Dentry {
     return null;
 }
 
-fn parentPath(path: []const u8) ?[]const u8 {
-    if (path.len == 0) return null;
-    const lastSlash = std.mem.lastIndexOf(u8, path, "/") orelse return null;
-    if (lastSlash == 0) return "/";
-    return path[0..lastSlash];
-}
-
 fn basename(path: []const u8) []const u8 {
     const lastSlash = std.mem.lastIndexOf(u8, path, "/") orelse return path;
     return path[lastSlash + 1..];
 }
 
-pub fn lookup(path: []const u8) ?*Dentry {
-    const name = if (path.len > 0 and path[0] == '/') path[1..] else path;
-    if (name.len == 0) return root_dentry;
-    // linear scan (dentry cache analog)
-    for (&dentries, 0..) |*d, i| if (dentry_used[i]) {
-        if (std.mem.eql(u8, d.nameSlice(), name)) return d;
-    };
+// ── Mount-aware hierarchical dentry traversal ──
+/// Walk dentry children for a single component. O(32) fixed scan.
+/// Fallback: linear scan of all dentries (for legacy flat-layout entries not in parent.children).
+fn lookupChild(parent: *Dentry, component: []const u8) ?*Dentry {
+    // Children tree walk
+    for (parent.children[0..parent.child_count]) |child_opt| {
+        if (child_opt) |child| {
+            if (std.mem.eql(u8, child.nameSlice(), component)) return child;
+        }
+    }
+    // Flat fallback for legacy dentries not in parent.children
+    for (0..MAX_DENTRIES) |i| {
+        if (dentry_used[i]) {
+            const d = &dentries[i];
+            if (d.inode != null) {
+                if (d.parent) |p| {
+                    if (p == parent and std.mem.eql(u8, d.nameSlice(), component)) return d;
+                }
+            }
+        }
+    }
     return null;
 }
 
-// ── Path-based operations (vinix parity: resolvePath) ──
-pub fn resolvePath(dirfd: i32, path: []const u8) ?*Dentry {
-    _ = dirfd;
-    if (path.len > 0 and path[0] == '/') {
-        return lookup(path);
+/// Split path into [start_dentry, component]. start_dentry is mount-aware.
+fn mountStart(target_path: []const u8) *Dentry {
+    var start = root_dentry.?;
+    for (mounts[0..mount_count]) |m| {
+        if (m.root_dentry) |mnt_root| {
+            if (m.target.len > 0 and std.mem.eql(u8, m.target, target_path)) {
+                start = mnt_root;
+            }
+        }
     }
-    // Relative path — resolve against root for sim simplicity
-    return lookup(path);
+    return start;
+}
+
+/// Walk path components from start dentry. O(depth * 32).
+pub fn lookupPath(start: *Dentry, path: []const u8) ?*Dentry {
+    const name = if (path.len > 0 and path[0] == '/') path[1..] else path;
+    if (name.len == 0) return start;
+    var current = start;
+    var it = std.mem.tokenizeScalar(u8, name, '/');
+    while (it.next()) |component| {
+        const child = lookupChild(current, component) orelse return null;
+        current = child;
+    }
+    return current;
+}
+
+/// Resolve path with dirfd (vinix parity). dirfd == AT_FDCWD uses root.
+pub fn resolvePath(dirfd: i32, path: []const u8) ?*Dentry {
+    const start = if (dirfd == AT_FDCWD) root_dentry.? else blk: {
+        // dirfd should be an open directory file
+        const f = fileAt(@intCast(dirfd)) orelse return null;
+        break :blk f.dentry orelse root_dentry.?;
+    };
+    return lookupPath(start, path);
+}
+
+// Keep old lookup for compat (flat scan, used by few callers)
+pub fn lookup(path: []const u8) ?*Dentry {
+    return lookupPath(root_dentry.?, path);
 }
 
 pub fn createFile(path: []const u8, content: []const u8) ?*Dentry {
@@ -163,7 +215,20 @@ pub fn createFile(path: []const u8, content: []const u8) ?*Dentry {
     const ino = allocInode(.regular) orelse return null;
     d.setName(name);
     d.inode = ino;
-    d.parent = root_dentry;
+    // Find parent: last component's parent is the dentry of the parent path
+    const parent_path = if (std.mem.lastIndexOf(u8, name, "/")) |idx| name[0..idx] else "";
+    if (parent_path.len > 0) {
+        d.parent = lookup(parent_path);
+    } else {
+        d.parent = root_dentry;
+    }
+    // Register as child of parent
+    if (d.parent) |p| {
+        if (p.child_count < 32) {
+            p.children[p.child_count] = d;
+            p.child_count += 1;
+        }
+    }
     // Allocate backing data
     const data = std.heap.page_allocator.alloc(u8, content.len) catch return null;
     @memcpy(data, content);
@@ -180,7 +245,14 @@ pub fn mkdiratImpl(dirfd: i32, path: []const u8, mode: u32) ?*Dentry {
     const ino = allocInode(.directory) orelse return null;
     d.setName(name);
     d.inode = ino;
+    // Register as child of root (simplified: single-level for now)
     d.parent = root_dentry;
+    if (root_dentry) |root| {
+        if (root.child_count < 32) {
+            root.children[root.child_count] = d;
+            root.child_count += 1;
+        }
+    }
     ino.mode = @intCast(mode);
     ino.ops = &ramfs_ops;
     return d;
@@ -188,7 +260,6 @@ pub fn mkdiratImpl(dirfd: i32, path: []const u8, mode: u32) ?*Dentry {
 
 pub fn openat(dirfd: i32, path: []const u8, flags: u32, mode: u32) ?*File {
     const d = resolvePath(dirfd, path) orelse return null;
-    // Handle O_CREAT
     if (d.inode == null and (flags & O_CREAT) != 0) {
         const new_d = createFile(path, &[_]u8{}) orelse return null;
         if (new_d.inode) |inode| {
@@ -226,12 +297,11 @@ pub fn close(f: *File) void {
     }
 }
 
-// ── Convenience: open by path (O_RDONLY default) ──
 pub fn open(path: []const u8) ?*File {
     return openat(AT_FDCWD, path, O_RDONLY, 0);
 }
 
-// ── Pipe integration: create a file backed by a pipe ──
+// ── Pipe integration ──
 const PipeOps = FileOps{
     .read = pipeFileRead,
     .write = pipeFileWrite,
@@ -254,7 +324,6 @@ fn pipeFileWrite(file: *File, data: []const u8) isize {
 fn pipeFileRelease(file: *File) void {
     if (file.data) |data| {
         const pipe = @as(*pipe_mod.Pipe, @ptrCast(@alignCast(data)));
-        // Don't close pipe here — it's closed via pipe.close() when both ends are gone
         _ = pipe;
     }
 }
@@ -277,7 +346,7 @@ pub fn openFileFromPipe(p: *pipe_mod.Pipe, is_read_end: bool) ?*File {
 }
 
 pub fn allocFd(file: *File) ?usize {
-    var i: usize = 3; // skip stdin/stdout/stderr
+    var i: usize = 3;
     while (i < MAX_OPEN_FILES) : (i += 1) {
         if (!open_used[i]) {
             open_used[i] = true;
@@ -360,7 +429,6 @@ pub const ramfs_ops = FileOps{
 
 // ── File operations (VFS-level API) ──
 pub fn read(f: *File, buf: []u8) isize {
-    // Dispatch through file-level ops first (pipe), then inode ops (ramfs)
     if (f.ops) |ops| {
         if (ops.read) |func| return func(f, buf);
     }
@@ -399,7 +467,7 @@ pub fn pread(f: *File, offset: u64, buf: []u8) !usize {
 // ── High-level FS operations ──
 pub fn chdir(path: []const u8) bool {
     _ = path;
-    return true; // Simplified: root is always cwd
+    return true;
 }
 
 pub fn getcwd() []const u8 {
@@ -413,7 +481,6 @@ pub fn mkdirat(dirfd: i32, path: []const u8, mode: u32) bool {
 
 pub fn unlinkat(dirfd: i32, path: []const u8, flags: u32) bool {
     _ = dirfd; _ = flags;
-    // Simplified: just mark inode as not used
     if (lookup(path)) |d| {
         if (d.inode) |inode| {
             for (&inode_used, 0..) |*u, i| {
@@ -428,14 +495,49 @@ pub fn unlinkat(dirfd: i32, path: []const u8, flags: u32) bool {
     return false;
 }
 
+// ── Mount table operations (vinix parity) ──
 pub fn mount(source: []const u8, target: []const u8, fs_type: []const u8, flags: u32, data: usize) bool {
-    _ = source; _ = target; _ = fs_type; _ = flags; _ = data;
-    return true; // Simplified
+    _ = source; _ = data;
+    if (mount_count >= MAX_MOUNTS) return false;
+    // Find target dentry via hierarchical lookup
+    const td = lookupPath(root_dentry.?, target) orelse return false;
+    // Check for duplicate mount
+    for (mounts[0..mount_count]) |m| {
+        if (m.root_dentry) |existing| {
+            if (existing == td) return false;
+        }
+    }
+    mounts[mount_count] = .{
+        .target = target,
+        .fs_type = fs_type,
+        .root_dentry = td,
+        .flags = flags,
+    };
+    mount_count += 1;
+    printk.printk(.info, "vfs: mounted {s} at {s}", .{ fs_type, target });
+    return true;
 }
 
 pub fn umount(target: []const u8, flags: u32) bool {
-    _ = target; _ = flags;
-    return true; // Simplified
+    _ = flags;
+    var found: ?usize = null;
+    for (mounts[0..mount_count], 0..) |m, i| {
+        if (m.target.len > 0 and std.mem.eql(u8, m.target, target)) {
+            found = i;
+            break;
+        }
+    }
+    if (found) |idx| {
+        // Compact
+        var j = idx;
+        while (j < mount_count - 1) : (j += 1) {
+            mounts[j] = mounts[j + 1];
+        }
+        mount_count -= 1;
+        printk.printk(.info, "vfs: umounted {s}", .{target});
+        return true;
+    }
+    return false;
 }
 
 pub fn readlinkat(dirfd: i32, path: []const u8, buf: []u8, len: usize) isize {
@@ -464,13 +566,13 @@ pub fn fchmod(fd: usize, mode: u32) bool {
     if (fd >= MAX_OPEN_FILES) return false;
     const f = &open_files[fd];
     if (f.inode) |inode| {
-        inode.mode = @intCast(mode & 0o7777 | (inode.mode & 0o170000)); // Preserve file type bits
+        inode.mode = @intCast(mode & 0o7777 | (inode.mode & 0o170000));
         return true;
     }
     return false;
 }
 
-// ── Stat support (vinix parity: stat.Stat) ──
+// ── Stat support ──
 pub const stat_mod = @import("../stat/stat.zig");
 
 pub fn fstat(fd: usize, stat_buf: ?*stat_mod.Stat) bool {
@@ -524,61 +626,80 @@ pub fn fstatat(dirfd: i32, path: []const u8, stat_buf: ?*stat_mod.Stat, flags: u
 pub const Dirent = stat_mod.Dirent;
 
 pub fn readdir(fd: usize, buf_ptr: usize, count: usize) isize {
-    if (fd >= MAX_OPEN_FILES) return -9; // -EBADF
+    if (fd >= MAX_OPEN_FILES) return -9;
     if (!open_used[fd]) return -9;
     const f = &open_files[fd];
-    const inode = f.inode orelse return -2; // -ENOENT
-    if (!stat_mod.isdir(inode.mode)) return -28; // -ENOTDIR
+    const inode = f.inode orelse return -2;
+    if (!stat_mod.isdir(inode.mode)) return -28;
 
-    // Simplified: emit the root directory's first entry
-    // In full impl: walk dentry children, fill Dirent array
-    _ = buf_ptr; _ = count;
-    return 0;
+    const d = f.dentry orelse return -2;
+    const buf = @as([*]u8, @ptrFromInt(buf_ptr))[0..count];
+    var offset: usize = 0;
+    var idx: usize = 0;
+    while (idx < d.child_count and offset + DIRENT_RECLEN <= count) : (idx += 1) {
+        if (d.children[idx]) |child| {
+            const child_ino = if (child.inode) |ino| ino.ino else 0;
+            const child_name = child.nameSlice();
+            const child_type = if (child.inode) |ino| stat_mod.direntType(ino.mode) else 0;
+            const rec = @as(*stat_mod.Dirent, @ptrCast(@alignCast(&buf[offset])));
+            rec.ino = @intCast(child_ino);
+            rec.off = @intCast(idx * DIRENT_RECLEN);
+            rec.reclen = DIRENT_RECLEN;
+            rec.type = child_type;
+            const copy_len = @min(child_name.len, 22);
+            @memcpy(rec.name[0..copy_len], child_name[0..copy_len]);
+            rec.name[copy_len] = 0;
+            offset += DIRENT_RECLEN;
+        }
+    }
+    return @intCast(offset);
 }
 
 // ── devtmpfs integration ──
-// Auto-populated character devices (analog: vinix devtmpfs)
 var dev_nodes: [32]struct { name: []const u8, inode: *Inode } = undefined;
 var dev_count: usize = 0;
 
-/// Register a char device under /dev (vinix parity: devtmpfs.register)
 pub fn devtmpfsRegister(name: []const u8, ops: *const FileOps) ?*Dentry {
+    const dev_dir = lookupPath(root_dentry.?, "dev") orelse return null;
     const d = allocDentry() orelse return null;
     const ino = allocInode(.character) orelse return null;
     d.setName(name);
     d.inode = ino;
-    d.parent = lookup("/dev") orelse root_dentry;
+    d.parent = dev_dir;
     ino.mode = 0o666;
     ino.ops = ops;
     ino.is_dev = true;
     ino.dev_id = dev_count;
+    // Register as child of /dev
+    if (dev_dir.child_count < 32) {
+        dev_dir.children[dev_dir.child_count] = d;
+        dev_dir.child_count += 1;
+    }
     dev_nodes[dev_count] = .{ .name = name, .inode = ino };
     dev_count += 1;
-    println("[INFO] vfs: devtmpfs: registered /dev/{s} (ino={d})\n", .{ name, ino.ino });
+    printk.printk(.info, "vfs: devtmpfs: registered /dev/{s} (ino={d})", .{ name, ino.ino });
     return d;
 }
 
-/// Auto-populate /dev with standard devices after mount
 pub fn devtmpfsPopulate() void {
     _ = devtmpfsRegister("null", &null_dev_ops);
     _ = devtmpfsRegister("console", &console_dev_ops);
     _ = devtmpfsRegister("zero", &zero_dev_ops);
     _ = devtmpfsRegister("full", &full_dev_ops);
-    _ = devtmpfsRegister("random", &zero_dev_ops); // stub: returns zeros
-    _ = devtmpfsRegister("urandom", &zero_dev_ops); // stub: returns zeros
-    println("[INFO] vfs: devtmpfs auto-populated {d} device nodes\n", .{ dev_count });
+    _ = devtmpfsRegister("random", &zero_dev_ops);
+    _ = devtmpfsRegister("urandom", &zero_dev_ops);
+    printk.printk(.info, "vfs: devtmpfs auto-populated {d} device nodes", .{dev_count});
 }
 
-// ── Character device ops for standard /dev nodes ──
-
+// ── Character device ops ──
 fn nullDevRead(file: *File, buf: []u8) isize {
     _ = file; _ = buf;
-    return 0; // EOF on read (vinix/dev/null analog)
+    return 0;
 }
 
 fn nullDevWrite(file: *File, data: []const u8) isize {
     _ = file;
-    return @intCast(data.len); // discard all writes
+    return @intCast(data.len);
 }
 
 const null_dev_ops = FileOps{
@@ -592,12 +713,12 @@ const null_dev_ops = FileOps{
 
 fn consoleDevRead(file: *File, buf: []u8) isize {
     _ = file; _ = buf;
-    return 0; // simplex: no keyboard input in hosted sim
+    return 0;
 }
 
 fn consoleDevWrite(file: *File, data: []const u8) isize {
     _ = file;
-    std.debug.print("{s}", .{data}); // echo to real stdout
+    std.debug.print("{s}", .{data});
     return @intCast(data.len);
 }
 
@@ -613,12 +734,12 @@ const console_dev_ops = FileOps{
 fn zeroDevRead(file: *File, buf: []u8) isize {
     _ = file;
     for (buf) |*b| b.* = 0;
-    return @intCast(buf.len); // returns zero bytes
+    return @intCast(buf.len);
 }
 
 fn zeroDevWrite(file: *File, data: []const u8) isize {
     _ = file;
-    return @intCast(data.len); // discard
+    return @intCast(data.len);
 }
 
 const zero_dev_ops = FileOps{
@@ -632,13 +753,13 @@ const zero_dev_ops = FileOps{
 
 fn fullDevRead(file: *File, buf: []u8) isize {
     _ = file; _ = buf;
-    return -28; // ENOSPC on read from /dev/full
+    return -28;
 }
 
 fn fullDevWrite(file: *File, data: []const u8) isize {
     _ = file;
     _ = data;
-    return -28; // ENOSPC — write always fails on /dev/full
+    return -28;
 }
 
 const full_dev_ops = FileOps{
@@ -649,9 +770,3 @@ const full_dev_ops = FileOps{
     .ioctl = null,
     .release = null,
 };
-
-// Helper for println-style output (used by devtmpfs)
-fn println(comptime fmt: []const u8, args: anytype) void {
-    // Use std.debug.print directly with format string
-    std.debug.print(fmt, args);
-}
