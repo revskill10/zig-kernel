@@ -87,6 +87,10 @@ export fn syscall_dispatch(frame: *TrapFrame) callconv(.c) void {
 }
 
 // --- #PF(14) page fault ---
+// pf_entry checks pf_dispatch rc: 0 => resume faulting insn via iret;
+// nonzero (fatal: out-of-window, user fault, bogus) => pf_fatal_halt, never
+// retries the faulting insn (Qodo #1). Halt is the correct bring-up fatal path:
+// no user tasks exist, so any unresolvable kernel fault is a kernel bug.
 export fn pf_entry() callconv(.naked) void {
     asm volatile (
         \\pusha
@@ -96,6 +100,8 @@ export fn pf_entry() callconv(.naked) void {
         \\push %eax
         \\call pf_dispatch
         \\add $8, %esp
+        \\test %eax, %eax
+        \\jnz pf_fatal_halt
         \\popa
         \\add $4, %esp
         \\iret
@@ -103,9 +109,18 @@ export fn pf_entry() callconv(.naked) void {
     );
 }
 
-// Returns 0 ok, <0 fatal (caller must NOT resume faulting insn; ponytail: no
-// halt/panic path yet since raw CPU trap is unaudited and unused — ceiling
-// when trap audit lands with int 0x80). Qodo #1.
+export fn pf_fatal_halt() callconv(.naked) noreturn {
+    asm volatile (
+        \\cli
+        \\1: hlt
+        \\jmp 1b
+        ::: .{ .memory = true }
+    );
+}
+
+// Returns 0 ok, <0 fatal (pf_entry routes nonzero to pf_fatal_halt, never resumes;
+// Qodo #1 fixed. Qodo #3 moot: handle_mm_fault rejects all U-bit faults, zero U
+// entries exist, supervisor-only world).
 pub export fn pf_dispatch(fault_addr: u32, error_code: u32) callconv(.c) isize {
     pf_hit_count += 1;
     pf_last_addr = fault_addr;
