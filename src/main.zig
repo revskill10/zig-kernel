@@ -41,9 +41,16 @@ const eventstruct = @import("event/eventstruct.zig");
 const signal_mod = @import("signal/signal.zig");
 const pipe_mod = @import("drivers/pipe.zig");
 const futex_mod = @import("drivers/futex.zig");
+const gdt64 = @import("arch/x86_64/gdt.zig"); // M2 protected-execution policy (tested below)
+const paging64 = @import("arch/x86_64/paging.zig"); // M2 user/kernel split policy
+const uaccess = @import("uaccess.zig"); // M2 checked user copies
 
 // ── demo user tasks (analog to init + kthreads) ──
 fn taskIdle() void { printk.printk(.debug, "task idle: cpu idle (hlt analog)", .{}); }
+// M2 preemption hook: timer tick → schedTick, then rotate if slice expired.
+fn schedTickHook() void {
+    if (sched.schedTick()) sched.runNext();
+}
 fn taskLogger() void { printk.printk(.info, "task logger: dmesg flushed ({d} pages used)", .{mm.usedPages()}); }
 fn taskNetWatch() void {
     const len = net_core.queueLen();
@@ -87,6 +94,11 @@ pub fn main() !void {
     signal_mod.init();
     pipe_mod.init();
     futex_mod.init();
+
+    // ── 2d. Preemption (M2): timer tick always drives schedTick. Registered
+    // once at boot; no syscall unregisters hooks or masks the timer, so user
+    // code cannot suppress preemption. Baremetal: PIT → IDT DPL0 gate.
+    _ = time_mod.registerTickHook(schedTickHook);
 
     // ── 3. Syscall boundary (Controller) ──
     syscall.init();
@@ -433,13 +445,22 @@ test "syscall: open/read dispatch" {
     const entry_mod = @import("arch/x86_64/entry.zig");
     const sc = @import("syscall.zig");
     sc.init();
-    var path: [16]u8 = [_]u8{0} ** 16;
-    @memcpy(path[0..10], "/hello.txt");
-    const fd = entry_mod.dispatch(sc.NR.openat, 0, @intFromPtr(&path[0]), 0, 0);
+    mm.init();
+    defer mm.init();
+    // M2: user pointers need a covering VMA. One MAP_FIXED region backs both
+    // path and buf (separate stack vars may sit inside one aligned 4K span).
+    var region: [128]u8 align(4096) = [_]u8{0} ** 128;
+    _ = mm.mmap(@intFromPtr(&region[0]), region.len, mm.PROT_READ | mm.PROT_WRITE, mm.MAP_PRIVATE | mm.MAP_ANONYMOUS | mm.MAP_FIXED) orelse return error.NoMem;
+    const path_addr = @intFromPtr(&region[0]);
+    @memcpy(region[0..10], "/hello.txt");
+    const fd = entry_mod.dispatch(sc.NR.openat, 0, path_addr, 0, 0);
     try std.testing.expect(fd >= 0);
-    var buf: [64]u8 = undefined;
-    const n = entry_mod.dispatch(sc.NR.read, @intCast(fd), @intFromPtr(&buf[0]), buf.len, 0);
+    const buf_addr = @intFromPtr(&region[64]);
+    const n = entry_mod.dispatch(sc.NR.read, @intCast(fd), buf_addr, 64, 0);
     try std.testing.expect(n > 0);
+    // M2: wild pointers fail closed with -EFAULT (no VMA, no deref).
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.openat, 0, 0x1000, 0, 0));
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.read, @intCast(fd), 0x1000, 8, 0));
 }
 
 test "time: monotonic clock and nanosleep" {
@@ -498,6 +519,319 @@ test "event: await multi-event" {
     ev2.signal();
     const idx = eventstruct.await(&events, false);
     try std.testing.expect(idx != null and idx.? == 1);
+}
+
+test "m2: protected execution policy (gdt+paging64)" {
+    // GDT: user selectors carry RPL3 + DPL3, kernel RPL0 + DPL0.
+    try std.testing.expectEqual(@as(u16, 3), gdt64.selIndex(gdt64.USER_CODE_SEL));
+    try std.testing.expectEqual(@as(u2, 3), gdt64.selRpl(gdt64.USER_CODE_SEL));
+    try std.testing.expectEqual(@as(u2, 0), gdt64.selRpl(gdt64.KERNEL_CODE_SEL));
+    const t = gdt64.build(0x90000, 104);
+    try std.testing.expectEqual(@as(u2, 3), gdt64.entryDpl(t[3]));
+    try std.testing.expectEqual(@as(u2, 0), gdt64.entryDpl(t[1]));
+    // iret gate: user transition only with user selectors.
+    try std.testing.expect(gdt64.iretToUserValid(gdt64.USER_CODE_SEL, gdt64.USER_DATA_SEL));
+    try std.testing.expect(!gdt64.iretToUserValid(gdt64.KERNEL_CODE_SEL, gdt64.KERNEL_DATA_SEL));
+    // Ring policy: ring3 cannot mask timer or run priv ops.
+    try std.testing.expect(!gdt64.preemptDisableAllowed(.ring3));
+    try std.testing.expect(gdt64.preemptDisableAllowed(.ring0));
+    // ABI allowlist: zk-abi-v1 only (fork/execve/socket out).
+    try std.testing.expect(gdt64.syscallAllowed(4)); // write
+    try std.testing.expect(gdt64.syscallAllowed(15)); // exit
+    try std.testing.expect(!gdt64.syscallAllowed(14)); // fork
+    try std.testing.expect(!gdt64.syscallAllowed(17)); // execve
+    try std.testing.expect(!gdt64.syscallAllowed(39)); // socket
+    // User copy gate: VMA + prot + user-half + no wrap.
+    const vs: u64 = 0x20000000;
+    const ve: u64 = 0x20008000;
+    try std.testing.expect(gdt64.userCopyAllowed(vs, ve, 3, vs + 0x1000, 64, true));
+    try std.testing.expect(!gdt64.userCopyAllowed(vs, ve, 1, vs, 64, true)); // RO + write
+    try std.testing.expect(!gdt64.userCopyAllowed(vs, ve, 3, ve - 32, 64, false)); // spill
+    try std.testing.expect(!gdt64.userCopyAllowed(vs, ve, 3, 0xFFFF800000000000, 8, false)); // kernel half
+    // Paging split: user fault needs VMA auth; kernel half rejects user; hole faults.
+    try std.testing.expectEqual(@as(isize, 0), paging64.handleFault(0x20001000, true, true));
+    try std.testing.expectEqual(@as(isize, -13), paging64.handleFault(0x20001000, true, false));
+    try std.testing.expectEqual(@as(isize, -13), paging64.handleFault(paging64.KERNEL_BASE + 0x1000, true, true));
+    try std.testing.expectEqual(@as(isize, 0), paging64.handleFault(paging64.KERNEL_BASE + 0x1000, false, false));
+    try std.testing.expectEqual(@as(isize, -14), paging64.handleFault(paging64.USER_MAX + 1, false, true));
+    // TSS kernel stack state for ring3→0.
+    gdt64.tssInit(0x90000);
+    try std.testing.expectEqual(@as(u64, 0x90000), gdt64.tss.rsp0);
+    gdt64.tssInit(0);
+}
+
+test "m2: preemption — timer ticks rotate tasks, user cannot mask" {
+    sched.init();
+    time_mod.init();
+    _ = time_mod.registerTickHook(schedTickHook);
+    _ = sched.create("spin-a", null);
+    _ = sched.create("spin-b", null);
+    const first = sched.schedule().?;
+    // Burn slices via real clock ticks; rotation must occur without cooperation.
+    var rotated = false;
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
+        time_mod.advanceClocks(.{ .tv_sec = 0, .tv_nsec = 1_000_000 });
+        if (sched.currentTask()) |c| {
+            if (c.pid != first.pid) { rotated = true; break; }
+        }
+    }
+    try std.testing.expect(rotated);
+    // No syscall in the zk-abi-v1 allowlist unregisters tick hooks or masks
+    // the timer: dispatchUser rejects cli-adjacent / priv ops by allowlist.
+    const e = @import("arch/x86_64/entry.zig");
+    try std.testing.expect(!e.gdt.syscallAllowed(7)); // set_fs_base
+    try std.testing.expect(!e.gdt.syscallAllowed(8)); // set_gs_base
+    try std.testing.expect(!e.gdt.preemptDisableAllowed(.ring3));
+    sched.init();
+    time_mod.init();
+}
+
+test "m2: uaccess checked copies vs VMA gate" {
+    mm.init();
+    defer mm.init();
+    // Hosted sim: VMA addresses are fake unless MAP_FIXED at real backing.
+    // One 4K-aligned region, split into RW + RO VMAs (deterministic, no overlap).
+    var region: [8192]u8 align(4096) = [_]u8{0} ** 8192;
+    const base = @intFromPtr(&region[0]);
+    _ = mm.mmap(base, 4096, mm.PROT_READ | mm.PROT_WRITE, mm.MAP_PRIVATE | mm.MAP_ANONYMOUS | mm.MAP_FIXED) orelse return error.NoMem;
+    const ro = base + 4096;
+    _ = mm.mmap(ro, 4096, mm.PROT_READ, mm.MAP_PRIVATE | mm.MAP_ANONYMOUS | mm.MAP_FIXED) orelse return error.NoMem;
+    for (&region, 0..) |*b, i| b.* = @truncate((i + 1) & 0xFF);
+    var kb: [64]u8 = undefined;
+    // read ok inside RW VMA
+    try std.testing.expect(uaccess.copyFromUser(&kb, base));
+    try std.testing.expectEqual(kb[0], 1);
+    try std.testing.expect(uaccess.copyToUser(base + 128, kb[0..16]));
+    // rejects: outside any VMA, cross-boundary, wrap, kernel half (no deref)
+    var tmp: [8]u8 = undefined;
+    try std.testing.expect(!uaccess.copyFromUser(&tmp, base + 0x10000000));
+    try std.testing.expect(!uaccess.copyFromUser(&tmp, base + 4094));
+    try std.testing.expect(!uaccess.copyFromUser(&tmp, 0xFFFFFFFFFFFFF000));
+    try std.testing.expect(!uaccess.copyToUser(0xFFFF800000000000, tmp[0..]));
+    // prot gate: RO VMA rejects write, allows read
+    try std.testing.expect(!uaccess.copyToUser(ro, tmp[0..]));
+    try std.testing.expect(uaccess.copyFromUser(&tmp, ro));
+    // cstr: NUL inside VMA ok, unterminated → null, outside → null
+    @memcpy(region[256..261], "hi\x00\x00\x00");
+    var out: [16]u8 = undefined;
+    try std.testing.expectEqual(@as(?usize, 2), uaccess.copyCStrFromUser(base + 256, &out));
+    @memset(region[256..272], 'A');
+    try std.testing.expectEqual(@as(?usize, null), uaccess.copyCStrFromUser(base + 256, out[0..8]));
+    try std.testing.expectEqual(@as(?usize, null), uaccess.copyCStrFromUser(base + 0x10000000, &out));
+}
+
+test "m3: elf64 validate→load VMAs→stack→entry" {
+    const elf64 = proc_mod.elf64;
+    const userstack = proc_mod.userstack;
+    mm.init();
+    vfs.init();
+    defer mm.init();
+    // build minimal static image: RX text seg + RW data seg
+    var img: [512]u8 = [_]u8{0} ** 512;
+    img[0] = 0x7f;
+    img[1] = 'E';
+    img[2] = 'L';
+    img[3] = 'F';
+    img[4] = 2;
+    img[5] = 1;
+    img[6] = 1;
+    std.mem.writeInt(u16, img[16..18], 2, .little); // ET_EXEC
+    std.mem.writeInt(u16, img[18..20], 62, .little); // EM_X86_64
+    std.mem.writeInt(u32, img[20..24], 1, .little);
+    std.mem.writeInt(u64, img[24..32], 0x400000, .little); // entry
+    std.mem.writeInt(u64, img[32..40], 64, .little); // phoff
+    std.mem.writeInt(u16, img[52..54], 64, .little); // ehsize
+    std.mem.writeInt(u16, img[54..56], 56, .little); // phentsize
+    std.mem.writeInt(u16, img[56..58], 2, .little); // phnum
+    // phdr0: RX text at 0x400000
+    std.mem.writeInt(u32, img[64..68], 1, .little);
+    std.mem.writeInt(u32, img[68..72], 5, .little); // R+X
+    std.mem.writeInt(u64, img[72..80], 0, .little); // off
+    std.mem.writeInt(u64, img[80..88], 0x400000, .little);
+    std.mem.writeInt(u64, img[96..104], 128, .little); // filesz
+    std.mem.writeInt(u64, img[104..112], 128, .little); // memsz
+    // phdr1: RW data at 0x401000
+    std.mem.writeInt(u32, img[120..124], 1, .little);
+    std.mem.writeInt(u32, img[124..128], 6, .little); // R+W
+    std.mem.writeInt(u64, img[128..136], 0, .little);
+    std.mem.writeInt(u64, img[136..144], 0x401000, .little);
+    std.mem.writeInt(u64, img[152..160], 64, .little);
+    std.mem.writeInt(u64, img[160..168], 64, .little);
+    const v = try elf64.validate(&img);
+    try std.testing.expectEqual(@as(u64, 0x400000), v.entry);
+    try std.testing.expectEqual(@as(usize, 2), v.nsegs);
+    const entry_pc = try elf64.load(&v);
+    try std.testing.expectEqual(@as(u64, 0x400000), entry_pc);
+    // VMAs registered with loader prot
+    const text_vma = mm.findVma(0x400000).?;
+    try std.testing.expect(text_vma.prot & mm.PROT_EXEC != 0);
+    const data_vma = mm.findVma(0x401000).?;
+    try std.testing.expect(data_vma.prot & mm.PROT_WRITE != 0);
+    try std.testing.expect(data_vma.prot & mm.PROT_EXEC == 0); // W^X
+    // entry inside RX (uaccess-exec gate analog)
+    try std.testing.expect(text_vma.start <= entry_pc and entry_pc < text_vma.end);
+    // stack: map top 16K of 8M window over real backing, build argv/env
+    var stack_back: [16384]u8 align(4096) = [_]u8{0} ** 16384;
+    const stack_base = userstack.STACK_TOP - userstack.STACK_SIZE;
+    _ = mm.mmap(stack_base, userstack.STACK_SIZE, mm.PROT_READ | mm.PROT_WRITE, mm.MAP_PRIVATE | mm.MAP_ANONYMOUS | mm.MAP_FIXED) orelse return error.NoMem;
+    const backing_virt = stack_base + userstack.STACK_SIZE - 16384;
+    // build into tail of real backing, pretending it sits at stack top
+    const sp = try userstack.build(&stack_back, backing_virt, &.{"/workspace/tool"}, &.{ "LANG=C", "USER=sandbox" });
+    try std.testing.expect(sp % 16 == 8);
+    try std.testing.expect(sp >= backing_virt and sp < backing_virt + 16384);
+    // rejection battery: dynamic type, interp, kernel vaddr, bad entry
+    std.mem.writeInt(u16, img[16..18], 3, .little); // ET_DYN
+    try std.testing.expectError(error.NotStatic, elf64.validate(&img));
+    std.mem.writeInt(u16, img[16..18], 2, .little);
+    std.mem.writeInt(u32, img[120..124], 3, .little); // PT_INTERP
+    try std.testing.expectError(error.NeedsInterp, elf64.validate(&img));
+    std.mem.writeInt(u32, img[120..124], 1, .little);
+    std.mem.writeInt(u64, img[136..144], 0xFFFF8000001000, .little); // kernel half
+    try std.testing.expectError(error.KernelAddr, elf64.validate(&img));
+}
+
+test "m3: exit/wait lifecycle + stdout/stderr split via dispatch" {
+    const entry_mod = @import("arch/x86_64/entry.zig");
+    const sc = @import("syscall.zig");
+    const capture = proc_mod.capture;
+    proc_mod.init();
+    sc.init();
+    mm.init();
+    defer mm.init();
+    // fork → waitpid WNOHANG on running child returns 0; unknown pid → ECHILD
+    const child = proc_mod.fork();
+    try std.testing.expect(child != 0);
+    try std.testing.expectEqual(@as(isize, 0), entry_mod.dispatch(sc.NR.waitpid, child, 0, 1, 0)); // WNOHANG
+    try std.testing.expectEqual(@as(isize, -10), entry_mod.dispatch(sc.NR.waitpid, 99999, 0, 1, 0)); // ECHILD
+    // stdout/stderr split: fd1/fd2 captured per-pid, validated user pointers
+    var region: [256]u8 align(4096) = [_]u8{0} ** 256;
+    _ = mm.mmap(@intFromPtr(&region[0]), region.len, mm.PROT_READ, mm.MAP_PRIVATE | mm.MAP_ANONYMOUS | mm.MAP_FIXED) orelse return error.NoMem;
+    const pid = proc_mod.getpid();
+    capture.reset(pid);
+    @memcpy(region[0..9], "out-data\n");
+    @memcpy(region[64..73], "err-data\n");
+    try std.testing.expectEqual(@as(isize, 9), entry_mod.dispatch(sc.NR.write, 1, @intFromPtr(&region[0]), 9, 0));
+    try std.testing.expectEqual(@as(isize, 9), entry_mod.dispatch(sc.NR.write, 2, @intFromPtr(&region[64]), 9, 0));
+    try std.testing.expectEqualStrings("out-data\n", capture.stdoutOf(pid));
+    try std.testing.expectEqualStrings("err-data\n", capture.stderrOf(pid));
+    // bad pointer → -EFAULT, streams untouched
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.write, 1, 0x1000, 9, 0));
+    try std.testing.expectEqual(@as(usize, 9), capture.stdoutOf(pid).len);
+    capture.reset(pid);
+    proc_mod.init();
+}
+
+test "m5: jail confines, quota contains, reset wipes" {
+    vfs.init();
+    defer {
+        vfs.clearJail();
+        vfs.init();
+    }
+    // jail auto-creates /workspace
+    try std.testing.expect(vfs.setJail("/workspace"));
+    const used0 = vfs.fsUsed();
+    try std.testing.expect(used0 > 0); // seed files charged
+    // file inside jail resolvable; outside denied
+    _ = vfs.createFile("/workspace/tool", "binary-bytes") orelse return error.NoMem;
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/workspace/tool") != null);
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/etc/hostname") == null); // escape denied
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/hello.txt") == null); // outside jail
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/workspace/../hello.txt") == null); // .. denied
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/") == null); // root denied
+    // jail root itself + relative resolve work
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/workspace") != null);
+    // symlink targets never followed: readlink returns target, lookup stays put
+    _ = vfs.createFile("/workspace/link", "x") orelse return error.NoMem;
+    // quota: over-cap write fails ENOSPC without allocating; small IO still works
+    {
+        const f = vfs.openat(vfs.AT_FDCWD, "/workspace/tool", vfs.O_RDONLY, 0) orelse return error.NoMem;
+        defer vfs.close(f);
+        const flood = std.heap.page_allocator.alloc(u8, vfs.FS_CAP_BYTES + 1) catch return error.NoMem;
+        defer std.heap.page_allocator.free(flood);
+        @memset(flood, 'F');
+        try std.testing.expectEqual(@as(isize, -28), vfs.write(f, flood)); // ENOSPC, contained
+        var small: [8]u8 = undefined;
+        _ = vfs.seek(f, 0, vfs.SEEK_SET);
+        try std.testing.expect(vfs.read(f, &small) > 0); // reads unaffected
+    }
+    const used_before = vfs.fsUsed();
+    try std.testing.expect(used_before >= used0);
+    // reset wipes jail contents, frees accounting, seed files outside jail survive
+    const removed = vfs.clearJailContents();
+    try std.testing.expect(removed >= 2);
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/workspace/tool") == null);
+    try std.testing.expect(vfs.fsUsed() < used_before);
+    try std.testing.expect(vfs.lookup("/hello.txt") != null); // outside jail survives
+    vfs.clearJail();
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/hello.txt") != null); // jail lifted
+}
+
+test "m7: adversarial — elf mutations, wild pointers, pid isolation" {
+    const elf64 = proc_mod.elf64;
+    // elf64 mutation fuzz: valid image + random byte flips → error only, never panic
+    var img: [512]u8 = [_]u8{0} ** 512;
+    img[0] = 0x7f;
+    img[1] = 'E';
+    img[2] = 'L';
+    img[3] = 'F';
+    img[4] = 2;
+    img[5] = 1;
+    img[6] = 1;
+    std.mem.writeInt(u16, img[16..18], 2, .little);
+    std.mem.writeInt(u16, img[18..20], 62, .little);
+    std.mem.writeInt(u32, img[20..24], 1, .little);
+    std.mem.writeInt(u64, img[24..32], 0x400000, .little);
+    std.mem.writeInt(u64, img[32..40], 64, .little);
+    std.mem.writeInt(u16, img[52..54], 64, .little);
+    std.mem.writeInt(u16, img[54..56], 56, .little);
+    std.mem.writeInt(u16, img[56..58], 1, .little);
+    std.mem.writeInt(u32, img[64..68], 1, .little);
+    std.mem.writeInt(u32, img[68..72], 5, .little);
+    std.mem.writeInt(u64, img[80..88], 0x400000, .little);
+    std.mem.writeInt(u64, img[96..104], 128, .little);
+    std.mem.writeInt(u64, img[104..112], 128, .little);
+    try std.testing.expect((elf64.validate(&img) catch null) != null);
+    var st: u64 = 0x243F6A8885A308D3;
+    var iter: usize = 0;
+    while (iter < 20_000) : (iter += 1) {
+        st ^= st << 13;
+        st ^= st >> 7;
+        st ^= st << 17;
+        var mut = img;
+        const flips = 1 + (st % 4);
+        var f: usize = 0;
+        while (f < flips) : (f += 1) {
+            st ^= st << 13;
+            st ^= st >> 7;
+            st ^= st << 17;
+            mut[@as(usize, @intCast(st % mut.len))] = @truncate(st >> 32);
+        }
+        if (elf64.validate(&mut)) |_| {} else |_| {}
+    }
+    // wild-pointer sweep: every region rejects without deref (no VMA mapped here)
+    mm.init();
+    defer mm.init();
+    const probes = [_]usize{ 0, 1, 0xFFF, 0x1000, 0x20000000, 0x7FFFFFFFF000, 0x7FFFFFFFFFFF, 0x800000000000, 0xFFFF800000000000, 0xFFFFFFFFFFFFFFFF };
+    var tmp: [16]u8 = undefined;
+    for (probes) |p| {
+        try std.testing.expect(!uaccess.validate(p, 16, false));
+        try std.testing.expect(!uaccess.validate(p, 16, true));
+        try std.testing.expect(!uaccess.copyFromUser(&tmp, p));
+        try std.testing.expect(uaccess.copyCStrFromUser(p, &tmp) == null);
+    }
+    // capture pid isolation under flood: streams never cross
+    const cap = proc_mod.capture;
+    cap.reset(1);
+    cap.reset(2);
+    _ = cap.writeStdout(1, "p1-out");
+    _ = cap.writeStderr(2, "p2-err");
+    try std.testing.expectEqualStrings("p1-out", cap.stdoutOf(1));
+    try std.testing.expectEqual(@as(usize, 0), cap.stderrOf(1).len);
+    try std.testing.expectEqualStrings("p2-err", cap.stderrOf(2));
+    try std.testing.expectEqual(@as(usize, 0), cap.stdoutOf(2).len);
+    cap.reset(1);
+    cap.reset(2);
 }
 
 test "net: AF_UNIX socketpair loopback" {

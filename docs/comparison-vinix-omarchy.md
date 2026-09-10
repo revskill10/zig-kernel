@@ -7,7 +7,7 @@ Three kernels, same architecture pattern:
 | Kernel | Language | Architecture | State |
 |--------|----------|--------------|-------|
 | vinix | V | Monolithic + LKM | Production |
-| zig-kernel | Zig 0.16.0 | Clean Architecture | Hosted sim, bare-metal QEMU verification in progress (inline asm under investigation) |
+| zig-kernel | Zig 0.16.0 | Clean Architecture | Hosted tests + ELF32 QEMU artifact; Linux runtime gate and supervisor remain |
 | Omarchy | C (Linux 6.18.7) | Monolithic | Production |
 
 ## Subsystem Comparison Matrix
@@ -105,7 +105,7 @@ Three kernels, same architecture pattern:
 | Networking | socket, bind, listen, connect, accept, send, recv, recvmsg | ✓ | ✓ |
 | Time | clock_gettime, nanosleep | ✓ | ✓ |
 | Info | getpid, getppid, gethostname, getcwd | ✓ | ✓ |
-| **Total** | **66 (subset)** | **66 (parity)** | **450+** |
+| **Total** | **66 (subset)** | **66-entry table; 62 implemented** | **450+** |
 
 ## QEMU Verification Comparison
 
@@ -149,16 +149,8 @@ QEMU target command (using existing script):
 # Build bare-metal ELF (x86 freestanding, 32-bit)
 zig build qemu-bin
 
-# Run in QEMU using the existing script (checks for cross-compiler)
-.\scripts\run-qemu.sh x86_64   # Note: script uses -kernel for ELF boot, expects 64-bit kernel; for 32-bit we may need to adjust
-# Alternatively, direct QEMU command for 32-bit:
-qemu-system-i386 \\
-  -machine q35 \\
-  -kernel zig-out/bin/kernel-baremetal \\
-  -append \"console=ttyS0\" \\
-  -nographic \\
-  -no-reboot \\
-  -serial stdio
+# Run the Linux/CI verification script (QEMU must be installed)
+bash scripts/qemu-x86_64.sh
 ```
 
 ### Key Similarities
@@ -229,13 +221,13 @@ qemu-system-i386 \\
 | Real BIOS/UEFI | Simulated | Bare-metal delta ~80 lines |
 | cgroups | Not implemented | Data structures exist |
 
-## Next Steps for QEMU Verification
+## Next Steps for QEMU and sandbox qualification
 
-1. Fix inline assembly syntax in baremetal.zig for Zig 0.16.0 (known issue with `outb`/`inb` constraints)
-2. Build and test: `zig build qemu-bin` → `.\scripts\run-qemu.sh x86_64` (or direct QEMU command for 32-bit)
-3. Verify output matches expected QEMU output (see below)
+1. Run the Linux CI serial gate and retain its boot log.
+2. Implement supervisor VM spawn/kill/reap and Unix-socket transport.
+3. Implement the guest API/agent and run Linux/KVM qualification.
 
-## Expected QEMU Output (when bare-metal build succeeds)
+## Expected QEMU Output (after the Linux QEMU gate passes)
 
 ```
 Booting zig-kernel bare-metal (x86 freestanding)...

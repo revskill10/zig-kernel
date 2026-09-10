@@ -44,6 +44,8 @@ pub const SIGWINCH: u8 = 28;
 pub const SIGIO: u8 = 29;
 pub const SIGPWR: u8 = 30;
 pub const SIGSYS: u8 = 31;
+pub const SIGRTMIN: u8 = 32;
+pub const SIGRTMAX: u8 = 64;
 
 // ── Sigprocmask how values ─────────────────────────────────────────────────
 pub const SIG_BLOCK: usize = 0;
@@ -68,7 +70,7 @@ pub const SigAction = struct {
 };
 
 // ── Siginfo (minimal, for RT signals) ─────────────────────────────────────
-pub const SigInfo = packed struct {
+pub const SigInfo = extern struct {
     si_signo: i32 = 0,
     si_errcode: i32 = 0,
     si_reserved: i32 = 0,
@@ -86,11 +88,14 @@ pub const SigInfo = packed struct {
 pub const SigState = struct {
     pending_signals: u64 = 0,
     masked_signals: u64 = 0,
-    sigactions: [32]SigAction = blk: {
-        var arr: [32]SigAction = undefined;
+    sigactions: [65]SigAction = blk: {
+        var arr: [65]SigAction = undefined;
         for (&arr) |*sa| sa.* = .{ .sa_sigaction = SIG_DFL };
         break :blk arr;
     },
+    /// One queued siginfo per signal. Standard signals coalesce; RT signals
+    /// retain the newest payload in this bounded model.
+    pending_info: [65]?SigInfo = [_]?SigInfo{null} ** 65,
     // Saved during signal delivery so sigreturn can restore.
     saved_mask: u64 = 0,
     saved_mask_valid: bool = false,
@@ -100,7 +105,8 @@ pub const SigState = struct {
     const Self = @This();
 
     pub fn signalBit(signum: u8) u64 {
-        return @as(u64, 1) << @as(u6, signum);
+        if (signum == 0 or signum > SIGRTMAX) return 0;
+        return @as(u64, 1) << @as(u6, signum - 1);
     }
 
     pub fn isPending(self: *const Self, signum: u8) bool {
@@ -112,11 +118,12 @@ pub const SigState = struct {
     }
 
     pub fn setPending(self: *Self, signum: u8) void {
-        self.pending_signals |= signalBit(signum);
+        if (signum >= 1 and signum <= SIGRTMAX) self.pending_signals |= signalBit(signum);
     }
 
     pub fn clearPending(self: *Self, signum: u8) void {
         self.pending_signals &= ~signalBit(signum);
+        if (signum <= SIGRTMAX) self.pending_info[signum] = null;
     }
 
     pub fn block(self: *Self, mask: u64) void {
@@ -144,11 +151,12 @@ fn unblockableMask() u64 {
 }
 
 fn validSignal(signum: usize) bool {
-    return signum >= 1 and signum <= 31;
+    return signum >= 1 and signum <= SIGRTMAX;
 }
 
 /// Sends a signal to a task. Marks it pending; wakes it from sleep.
 pub fn sendsig(task: *Task, signum: u8) void {
+    if (!validSignal(signum)) return;
     const sig_state = task.sigState() orelse {
         printk.printk(.warn, "signal: sendsig to task '{s}' with no signal state, dropping", .{task.name});
         return;
@@ -160,6 +168,17 @@ pub fn sendsig(task: *Task, signum: u8) void {
     printk.printk(.debug, "signal: sent {s}({d}) to pid={d} '{s}' (pending=0x{x})", .{
         signalName(signum), signum, task.pid, task.name, sig_state.pending_signals
     });
+}
+
+/// Queue a signal with its Linux-style delivery metadata. This is the
+/// RT-signal equivalent of `send_sig_info`; standard signals still coalesce.
+pub fn sendsigInfo(task: *Task, info: SigInfo) void {
+    const signum: u8 = @intCast(info.si_signo);
+    if (!validSignal(signum)) return;
+    const state = task.sigState() orelse return;
+    state.pending_info[signum] = info;
+    state.setPending(signum);
+    if (task.state == .sleeping) task.state = .runnable;
 }
 
 /// Delivers one pending, unblocked signal to the current task.
@@ -264,7 +283,7 @@ pub fn signalName(sig: u8) []const u8 {
         SIGXFSZ => "SIGXFSZ", SIGVTALRM => "SIGVTALRM", SIGPROF => "SIGPROF",
         SIGWINCH => "SIGWINCH", SIGIO => "SIGIO", SIGPWR => "SIGPWR",
         SIGSYS => "SIGSYS",
-        else => "SIGRT",
+        else => if (sig >= SIGRTMIN and sig <= SIGRTMAX) "SIGRT" else "SIGUNKNOWN",
     };
 }
 
@@ -279,4 +298,8 @@ pub fn nextDeliverable(sig_state: *const SigState) ?u8 {
     if (unmasked == 0) return null;
     const bit = @ctz(unmasked);
     return @truncate(bit + 1);
+}
+
+pub fn isRealtime(sig: u8) bool {
+    return sig >= SIGRTMIN and sig <= SIGRTMAX;
 }

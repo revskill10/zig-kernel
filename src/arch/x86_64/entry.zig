@@ -2,6 +2,8 @@
 // Hosted simulation: syscall table as function-pointer array (Clean Controller boundary).
 const std = @import("std");
 const printk = @import("../../lib/printk.zig");
+pub const gdt = @import("gdt.zig"); // M2 protected-execution policy (selectors, TSS, gates)
+pub const paging64 = @import("paging.zig"); // M2 user/kernel split policy
 
 pub const SYSCALL_MAX: usize = 450; // Linux NR parity (was 66 vinix-only) // Match vinix 66-entry table exactly
 
@@ -90,4 +92,11 @@ pub fn dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize) isize {
     if (nr >= SYSCALL_MAX) return -38;
     const func = syscall_table[nr] orelse return -38;
     return func(a0, a1, a2, a3);
+}
+
+/// User-mode dispatch (M2): zk-abi-v1 allowlist first, then table.
+/// Disallowed NR → -38 even if registered. Kernel path keeps raw dispatch.
+pub fn dispatchUser(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize) isize {
+    if (!gdt.syscallAllowed(nr)) return -38;
+    return dispatch(nr, a0, a1, a2, a3);
 }

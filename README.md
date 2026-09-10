@@ -22,26 +22,28 @@ net: recv() ← 72B 'HELLO from Zig Linux net stack ...' (loopback via descripto
  eth0: tx 1 pkts 72B  rx 0 pkts 0B  mac 52:54:00:12:34:56
 ```
 
-## QEMU Verification
+## Verification boundaries
+
+The hosted implementation is the development/test target: it is a native
+simulation, not a VM boundary. The supervisor currently provides tested policy,
+session, workspace, API, and QEMU-argument logic; Linux process lifecycle,
+Unix-socket transport, and guest qualification are still follow-up work.
 
 For bare-metal verification, see `docs/qemu-verification-guide.md`.
 
-**Linux/macOS users with QEMU:**
+**Build the current QEMU artifact:**
 ```bash
-# Cross-compile for x86_64
-zig build -Dtarget=x86_64-linux-gnu -Doptimize=ReleaseSmall
-# Output: zig-out/bin/kernel
-
-# Run in QEMU
-qemu-system-x86_64 \
-  -machine q35,accel=tcg \
-  -cpu qemu64 \
-  -smp 1 \
-  -m 512M \
-  -kernel zig-out/bin/kernel \
-  -append "console=ttyS0 loglevel=7" \
-  -nographic
+zig build qemu-bin -Doptimize=ReleaseSmall
+# zig-out/bin/kernel-baremetal (ELF32 i386, direct-load demo kernel)
 ```
+
+On Linux with QEMU installed, run the CI-equivalent check:
+```bash
+bash scripts/qemu-x86_64.sh
+```
+
+The image is a standalone freestanding kernel demo. It does not boot a Linux
+userspace, consume an initramfs, or provide production sandbox isolation.
 
 ## Layout (matches real kernel + Clean Architecture)
 

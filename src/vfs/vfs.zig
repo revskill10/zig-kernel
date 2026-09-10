@@ -91,6 +91,27 @@ var root_dentry: ?*Dentry = null;
 var mounts: [MAX_MOUNTS]MountEntry = [_]MountEntry{.{}} ** MAX_MOUNTS;
 var mount_count: usize = 0;
 
+// M5 isolated workspaces: jail root + FS quota.
+// Jail confines absolute-path resolution to a subtree (/workspace).
+// `..` above jail clamps (never escapes); symlinks never followed by lookup.
+// Quota caps total ramfs bytes; over-cap writes fail -28 ENOSPC.
+var jail_root: ?*Dentry = null;
+pub const FS_CAP_BYTES: usize = 32 << 20; // guest ramfs cap (mirrors workspace_mib default)
+var fs_used_bytes: usize = 0;
+pub fn fsUsed() usize { return fs_used_bytes; }
+
+/// Charge growth against the FS cap. Returns false when over cap (ENOSPC).
+fn fsCharge(growth: usize) bool {
+    if (fs_used_bytes + growth > FS_CAP_BYTES) return false;
+    if (fs_used_bytes + growth < fs_used_bytes) return false; // wrapped
+    fs_used_bytes += growth;
+    return true;
+}
+
+fn fsRelease(n: usize) void {
+    fs_used_bytes = if (n > fs_used_bytes) 0 else fs_used_bytes - n;
+}
+
 // Global open file table (shared across processes for hosted sim)
 var open_files: [MAX_OPEN_FILES]File = undefined;
 var open_used: [MAX_OPEN_FILES]bool = [_]bool{false} ** MAX_OPEN_FILES;
@@ -107,6 +128,8 @@ pub fn init() void {
     root_dentry = null;
     dev_count = 0;
     mount_count = 0;
+    jail_root = null; // M5: no jail until setJail
+    fs_used_bytes = 0; // M5: quota accounting restarts (createFile charges below)
     root_dentry = allocDentry();
     const root_inode = allocInode(.directory) orelse unreachable;
     root_inode.mode = 0o755;
@@ -137,6 +160,24 @@ fn allocDentry() ?*Dentry {
         return &dentries[i];
     };
     return null;
+}
+
+fn freeDentrySlot(d: *Dentry) void {
+    for (&dentries, 0..) |*slot, idx| {
+        if (slot == d) {
+            dentry_used[idx] = false;
+            return;
+        }
+    }
+}
+
+fn releaseInodeSlot(ino: *Inode) void {
+    for (&inodes, 0..) |*slot, idx| {
+        if (slot == ino) {
+            inode_used[idx] = false;
+            return;
+        }
+    }
 }
 
 fn basename(path: []const u8) []const u8 {
@@ -195,9 +236,28 @@ pub fn lookupPath(start: *Dentry, path: []const u8) ?*Dentry {
 }
 
 /// Resolve path with dirfd (vinix parity). dirfd == AT_FDCWD uses root.
+/// M5: when a jail is set, absolute paths resolve then must be jail-or-
+/// descendant (ancestor walk) — escapes return null. Relative paths resolve
+/// under the jail (no per-process cwd in hosted sim).
 /// ponytail: unopened numeric dirfd falls back to root (hosted sim has no
 /// per-test proc fd state; Linux would EBADF). ceiling: per-process cwd/fd table.
 pub fn resolvePath(dirfd: i32, path: []const u8) ?*Dentry {
+    const jail = jail_root;
+    if (jail == null) return resolveRaw(dirfd, path);
+    if (path.len == 0) return null;
+    if (path[0] == '/') {
+        const d = lookupPath(root_dentry.?, path) orelse return null;
+        var cur: ?*Dentry = d;
+        while (cur) |c| {
+            if (c == jail.?) return d;
+            cur = c.parent;
+        }
+        return null; // outside jail — escape denied
+    }
+    return lookupPath(jail.?, path);
+}
+
+fn resolveRaw(dirfd: i32, path: []const u8) ?*Dentry {
     const start = if (dirfd == AT_FDCWD) root_dentry.? else blk: {
         // dirfd should be an open directory file
         const f = fileAt(@intCast(dirfd)) orelse break :blk root_dentry.?;
@@ -212,15 +272,19 @@ pub fn lookup(path: []const u8) ?*Dentry {
 }
 
 pub fn createFile(path: []const u8, content: []const u8) ?*Dentry {
-    const name = if (path.len > 0 and path[0] == '/') path[1..] else path;
+    const rel = if (path.len > 0 and path[0] == '/') path[1..] else path;
+    const name = basename(rel);
     const d = allocDentry() orelse return null;
-    const ino = allocInode(.regular) orelse return null;
+    const ino = allocInode(.regular) orelse {
+        freeDentrySlot(d);
+        return null;
+    };
     d.setName(name);
     d.inode = ino;
-    // Find parent: last component's parent is the dentry of the parent path
-    const parent_path = if (std.mem.lastIndexOf(u8, name, "/")) |idx| name[0..idx] else "";
+    // Parent = containing dir (M5: basename fix — nested paths resolve by component).
+    const parent_path = if (std.mem.lastIndexOf(u8, rel, "/")) |idx| rel[0..idx] else "";
     if (parent_path.len > 0) {
-        d.parent = lookup(parent_path);
+        d.parent = lookup(parent_path) orelse root_dentry;
     } else {
         d.parent = root_dentry;
     }
@@ -232,7 +296,17 @@ pub fn createFile(path: []const u8, content: []const u8) ?*Dentry {
         }
     }
     // Allocate backing data
-    const data = std.heap.page_allocator.alloc(u8, content.len) catch return null;
+    if (!fsCharge(content.len)) {
+        freeDentrySlot(d);
+        releaseInodeSlot(ino);
+        return null; // M5: ENOSPC at creation
+    }
+    const data = std.heap.page_allocator.alloc(u8, content.len) catch {
+        fsRelease(content.len);
+        freeDentrySlot(d);
+        releaseInodeSlot(ino);
+        return null;
+    };
     @memcpy(data, content);
     ino.data = data;
     ino.size = content.len;
@@ -374,11 +448,19 @@ fn ramfs_write(file: *File, data_in: []const u8) isize {
     const inode = file.inode orelse return -2;
     const new_len = file.pos + data_in.len;
     if (inode.data == null or new_len > inode.data.?.len) {
-        const new_data = std.heap.page_allocator.alloc(u8, new_len) catch return -12;
+        // M5: quota — growth beyond cap fails ENOSPC, contained to this file.
+        const old_len = if (inode.data) |old| old.len else 0;
+        const growth = if (new_len > old_len) new_len - old_len else 0;
+        if (!fsCharge(growth)) return -28; // -ENOSPC
+        const new_data = std.heap.page_allocator.alloc(u8, new_len) catch {
+            fsRelease(growth);
+            return -12;
+        };
         if (inode.data) |old| {
             @memcpy(new_data[0..@min(old.len, new_len)], old[0..@min(old.len, new_len)]);
             std.heap.page_allocator.free(old);
         }
+        // Net accounting: +new_len (fresh alloc) -old_len (freed) == +growth. Already +growth.
         inode.data = new_data;
     }
     @memcpy(inode.data.?[file.pos .. file.pos + data_in.len], data_in);
@@ -772,3 +854,109 @@ const full_dev_ops = FileOps{
     .ioctl = null,
     .release = null,
 };
+
+// ── M5 isolated workspaces: jail + reset ──
+
+/// Confine absolute-path resolution to the subtree at jail_path (e.g. "/workspace").
+/// Creates it if missing. Returns false when path unusable.
+pub fn setJail(jail_path: []const u8) bool {
+    const d = lookup(jail_path) orelse {
+        // auto-create single-level dir under root
+        const created = mkdiratImpl(AT_FDCWD, jail_path, 0o755) orelse return false;
+        jail_root = created;
+        return true;
+    };
+    jail_root = d;
+    return true;
+}
+
+pub fn clearJail() void {
+    jail_root = null;
+}
+
+/// Resolve path under jail: absolute paths re-rooted at jail, `..` clamped at
+/// jail root (never escapes), `.`/`//` normalized. Relative paths resolve from
+/// jail root too (no per-process cwd in hosted sim).
+/// Symlinks are never followed by lookup — escape via link impossible.
+pub fn resolveJailed(path: []const u8) ?*Dentry {
+    const jail = jail_root orelse return resolvePath(AT_FDCWD, path);
+    if (path.len == 0) return null;
+    // Absolute guest paths carry the jail prefix (/workspace/...) — strip it.
+    // Other absolute paths re-root at jail (leading / dropped below).
+    var rel = path;
+    if (std.mem.startsWith(u8, rel, "/workspace/")) {
+        rel = rel["/workspace".len..];
+    } else if (std.mem.eql(u8, rel, "/workspace")) {
+        return jail;
+    }
+    const stripped = if (rel.len > 0 and rel[0] == '/') rel[1..] else rel;
+    // normalize into small stack buffer
+    var norm: [512]u8 = undefined;
+    var parts: [64][]const u8 = undefined;
+    var depth: usize = 0;
+    var it = std.mem.tokenizeScalar(u8, stripped, '/');
+    while (it.next()) |c| {
+        if (std.mem.eql(u8, c, ".")) continue;
+        if (std.mem.eql(u8, c, "..")) {
+            if (depth > 0) depth -= 1; // clamp at jail root
+            continue;
+        }
+        if (depth >= parts.len) return null;
+        parts[depth] = c;
+        depth += 1;
+    }
+    var n: usize = 0;
+    for (parts[0..depth]) |p| {
+        if (n != 0) {
+            if (n >= norm.len) return null;
+            norm[n] = '/';
+            n += 1;
+        }
+        if (n + p.len > norm.len) return null;
+        @memcpy(norm[n .. n + p.len], p);
+        n += p.len;
+    }
+    if (n == 0) return jail; // path == jail root itself
+    return lookupPath(jail, norm[0..n]);
+}
+
+/// M5 reset: destroy all children under jail (frees inode data + accounting),
+/// leaving the jail dir itself. Returns files removed.
+pub fn clearJailContents() usize {
+    const jail = jail_root orelse return 0;
+    var removed: usize = 0;
+    var i: usize = 0;
+    while (i < jail.child_count) {
+        const child = jail.children[i] orelse {
+            i += 1;
+            continue;
+        };
+        freeDentryTree(child);
+        removed += 1;
+        // swap-remove
+        jail.children[i] = jail.children[jail.child_count - 1];
+        jail.children[jail.child_count - 1] = null;
+        jail.child_count -= 1;
+    }
+    return removed;
+}
+
+fn freeDentryTree(d: *Dentry) void {
+    // recurse children first
+    var i: usize = 0;
+    while (i < d.child_count) {
+        if (d.children[i]) |c| freeDentryTree(c);
+        i += 1;
+    }
+    d.child_count = 0;
+    if (d.inode) |ino| {
+        if (ino.data) |data| {
+            fsRelease(data.len);
+            std.heap.page_allocator.free(data);
+            ino.data = null;
+        }
+        ino.size = 0;
+        releaseInodeSlot(ino);
+    }
+    freeDentrySlot(d);
+}
