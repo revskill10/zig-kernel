@@ -3,7 +3,7 @@
 const std = @import("std");
 const printk = @import("../../lib/printk.zig");
 
-pub const SYSCALL_MAX: usize = 66; // Match vinix 66-entry table exactly
+pub const SYSCALL_MAX: usize = 450; // Linux NR parity (was 66 vinix-only) // Match vinix 66-entry table exactly
 
 // Syscall numbers matching vinix layout
 pub const NR = struct {

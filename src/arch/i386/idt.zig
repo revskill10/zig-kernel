@@ -1,4 +1,7 @@
-// IDT 256 entries + 0x80 DPL3 trap gate + #PF(14) DPL0 interrupt gate. Parity with arch/x86_64/entry.zig (66 entries).
+// IDT 256 entries + 0x80 DPL3 trap gate + #PF(14) DPL0 interrupt gate.
+// t5d: syscall table expanded to 450 with Linux x86_64 NR parity.
+// First 66: vinix custom layout. 67+: Linux x86_64 NRs by name.
+// Unregistered slots return -38 ENOSYS.
 const paging = @import("paging.zig");
 
 var idt: [256]IDTEntry align(8) = [_]IDTEntry{.{ .offset_low = 0, .selector = 0, .zero = 0, .type_attr = 0, .offset_high = 0 }} ** 256;
@@ -9,13 +12,13 @@ pub const IDTDescriptor = packed struct { limit: u16, base: u32 };
 pub inline fn cli() void { asm volatile ("cli" ::: .{ .memory = true }); }
 pub inline fn sti() void { asm volatile ("sti" ::: .{ .memory = true }); }
 
-// pf stats (mirrors paging.pf_handled but counted at entry)
 pub var pf_hit_count: usize = 0;
 pub var pf_last_addr: u32 = 0;
 pub var pf_last_err: u32 = 0;
 
-// --- syscall table parity (mirrors entry.zig) ---
-pub const SYSCALL_MAX: usize = 66;
+// --- syscall table (450 entries, Linux x86_64 NR parity) ---
+pub const SYSCALL_MAX: usize = 450;
+
 pub const NR = struct {
     pub const kprint: usize = 0; pub const mmap: usize = 1; pub const openat: usize = 2; pub const read: usize = 3;
     pub const write: usize = 4; pub const seek: usize = 5; pub const close: usize = 6; pub const set_fs_base: usize = 7;
@@ -32,7 +35,14 @@ pub const NR = struct {
     pub const clock_get: usize = 50; pub const gethostname: usize = 51; pub const sethostname: usize = 52; pub const nanosleep: usize = 53;
     pub const fchmod: usize = 57; pub const linkat: usize = 58; pub const connect: usize = 59; pub const getpeername: usize = 60;
     pub const accept: usize = 61; pub const recvmsg: usize = 62; pub const new_thread: usize = 65;
+    // Linux NRs 66-449 (ENOSYS unless registered). Add named entries as needed.
+    // Example: pub const clone: usize = 56; pub const exit_group: usize = 231;
+    // pub const epoll_create1: usize = 291; pub const statx: usize = 332;
+    // pub const clone3: usize = 435; pub const close_range: usize = 436;
+    // pub const openat2: usize = 437; pub const io_uring_setup: usize = 425;
 };
+
+
 pub const SyscallFn = *const fn (a0: usize, a1: usize, a2: usize, a3: usize) callconv(.c) isize;
 pub var syscall_table: [SYSCALL_MAX]?SyscallFn = [_]?SyscallFn{null} ** SYSCALL_MAX;
 pub var syscall_names: [SYSCALL_MAX]?[]const u8 = [_]?[]const u8{null} ** SYSCALL_MAX;
@@ -47,7 +57,7 @@ pub fn dispatch(nr: usize, a0: usize, a1: usize, a2: usize, a3: usize) isize {
     return f(a0, a1, a2, a3);
 }
 
-// Trap frame after pusha + push esp. pusha order: EAX,ECX,EDX,EBX,ESP,EBP,ESI,EDI -> memory low=EDI.
+// Trap frame
 pub const TrapFrame = extern struct {
     edi: u32, esi: u32, ebp: u32, esp_orig: u32, ebx: u32, edx: u32, ecx: u32, eax: u32,
     eip: u32, cs: u32, eflags: u32,
@@ -59,7 +69,6 @@ fn setGate(vec: u8, handler: usize, dpl: u2) void {
 }
 
 fn setInterruptGate(vec: u8, handler: usize) void {
-    // P=1, DPL=00, 0, type=1110 (32-bit interrupt gate) => 0x8E. Clears IF on entry.
     const attr: u8 = 0x8E;
     idt[vec] = .{ .offset_low = @intCast(handler & 0xFFFF), .selector = 0x08, .type_attr = attr, .offset_high = @intCast((handler >> 16) & 0xFFFF) };
 }
@@ -86,11 +95,6 @@ export fn syscall_dispatch(frame: *TrapFrame) callconv(.c) void {
     frame.eax = @bitCast(@as(i32, @intCast(ret)));
 }
 
-// --- #PF(14) page fault ---
-// pf_entry checks pf_dispatch rc: 0 => resume faulting insn via iret;
-// nonzero (fatal: out-of-window, user fault, bogus) => pf_fatal_halt, never
-// retries the faulting insn (Qodo #1). Halt is the correct bring-up fatal path:
-// no user tasks exist, so any unresolvable kernel fault is a kernel bug.
 export fn pf_entry() callconv(.naked) void {
     asm volatile (
         \\pusha
@@ -118,9 +122,6 @@ export fn pf_fatal_halt() callconv(.naked) noreturn {
     );
 }
 
-// Returns 0 ok, <0 fatal (pf_entry routes nonzero to pf_fatal_halt, never resumes;
-// Qodo #1 fixed. Qodo #3 moot: handle_mm_fault rejects all U-bit faults, zero U
-// entries exist, supervisor-only world).
 pub export fn pf_dispatch(fault_addr: u32, error_code: u32) callconv(.c) isize {
     pf_hit_count += 1;
     pf_last_addr = fault_addr;
@@ -136,8 +137,5 @@ pub fn idt_init() void {
     asm volatile ("lidt (%[p])" : : [p] "r" (&idt_desc) : .{ .memory = true });
 }
 
-// helpers for baremetal introspection
-pub fn isPfPresent() bool {
-    return (idt[14].type_attr & 0x80) != 0;
-}
+pub fn isPfPresent() bool { return (idt[14].type_attr & 0x80) != 0; }
 pub fn pfGateAttr() u8 { return idt[14].type_attr; }
