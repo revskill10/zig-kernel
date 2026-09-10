@@ -128,8 +128,11 @@ fn sys_read(fd: usize, buf_ptr: usize, len: usize, _a3: usize) callconv(.c) isiz
 fn sys_write(fd: usize, buf_ptr: usize, len: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
     if (!uaccess.validate(buf_ptr, len, false)) return -14;
-    const f = proc_mod.fdAt(@intCast(fd)) orelse return -9;
     const data = @as([*]const u8, @ptrFromInt(buf_ptr))[0..len];
+    // M3: fd 1/2 captured per-process (stdout/stderr split), not vfs.
+    if (fd == 1) return @intCast(proc_mod.capture.writeStdout(proc_mod.getpid(), data));
+    if (fd == 2) return @intCast(proc_mod.capture.writeStderr(proc_mod.getpid(), data));
+    const f = proc_mod.fdAt(@intCast(fd)) orelse return -9;
     return vfs.write(f, data);
 }
 

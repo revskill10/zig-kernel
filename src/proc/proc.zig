@@ -9,6 +9,9 @@ const vfs = @import("../vfs/vfs.zig");
 const mm = @import("../mm/mm.zig");
 const signal_mod = @import("../signal/signal.zig");
 const stat_mod = @import("../stat/stat.zig");
+pub const elf64 = @import("elf64.zig"); // M3 validated ELF64 loader
+pub const userstack = @import("userstack.zig"); // M3 user stack builder
+pub const capture = @import("capture.zig"); // M3 stdout/stderr capture
 
 pub const MAX_PROCESSES: usize = 64;
 pub const MAX_THREADS: usize = 256;
@@ -312,7 +315,9 @@ pub fn fork() u32 {
     pid_lock.acquire();
     defer pid_lock.release();
 
-    const parent = currentProcess();
+    // M3: unlocked access — lock already held (processAt/allocatePid/bindTid
+    // re-acquire pid_lock; non-reentrant spinlock would self-deadlock).
+    const parent = processes[current_pid] orelse processes[1] orelse return 0;
     const child = allocProcess(parent.name) orelse return 0;
 
     // Initialize child process (copy-on-write would be here in real kernel)
@@ -333,7 +338,17 @@ pub fn fork() u32 {
     // Copy signal actions
     // Copy memory mappings (simplified: share same virtual ranges)
 
-    const child_pid = allocatePid(child) orelse {
+    const child_pid = blk: {
+        var k: u32 = 1;
+        while (k < MAX_PID) : (k += 1) {
+            if (processes[k] == null and threads_by_tid[k] == null) {
+                processes[k] = child;
+                child.pid = k;
+                break :blk k;
+            }
+        }
+        break :blk null;
+    } orelse {
         // Failed to allocate PID
         return 0;
     };
@@ -341,7 +356,7 @@ pub fn fork() u32 {
     // Create main thread for child (tid == pid)
     const child_thread = allocThread(parent.name, child) orelse return 0;
     child_thread.tid = child_pid;
-    bindTid(child_pid, child_thread);
+    threads_by_tid[child_pid] = child_thread;
 
     // Add to parent's children
     var j: usize = 0;

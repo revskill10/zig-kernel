@@ -621,6 +621,107 @@ test "m2: uaccess checked copies vs VMA gate" {
     try std.testing.expectEqual(@as(?usize, null), uaccess.copyCStrFromUser(base + 0x10000000, &out));
 }
 
+test "m3: elf64 validate→load VMAs→stack→entry" {
+    const elf64 = proc_mod.elf64;
+    const userstack = proc_mod.userstack;
+    mm.init();
+    vfs.init();
+    defer mm.init();
+    // build minimal static image: RX text seg + RW data seg
+    var img: [512]u8 = [_]u8{0} ** 512;
+    img[0] = 0x7f;
+    img[1] = 'E';
+    img[2] = 'L';
+    img[3] = 'F';
+    img[4] = 2;
+    img[5] = 1;
+    img[6] = 1;
+    std.mem.writeInt(u16, img[16..18], 2, .little); // ET_EXEC
+    std.mem.writeInt(u16, img[18..20], 62, .little); // EM_X86_64
+    std.mem.writeInt(u32, img[20..24], 1, .little);
+    std.mem.writeInt(u64, img[24..32], 0x400000, .little); // entry
+    std.mem.writeInt(u64, img[32..40], 64, .little); // phoff
+    std.mem.writeInt(u16, img[52..54], 64, .little); // ehsize
+    std.mem.writeInt(u16, img[54..56], 56, .little); // phentsize
+    std.mem.writeInt(u16, img[56..58], 2, .little); // phnum
+    // phdr0: RX text at 0x400000
+    std.mem.writeInt(u32, img[64..68], 1, .little);
+    std.mem.writeInt(u32, img[68..72], 5, .little); // R+X
+    std.mem.writeInt(u64, img[72..80], 0, .little); // off
+    std.mem.writeInt(u64, img[80..88], 0x400000, .little);
+    std.mem.writeInt(u64, img[96..104], 128, .little); // filesz
+    std.mem.writeInt(u64, img[104..112], 128, .little); // memsz
+    // phdr1: RW data at 0x401000
+    std.mem.writeInt(u32, img[120..124], 1, .little);
+    std.mem.writeInt(u32, img[124..128], 6, .little); // R+W
+    std.mem.writeInt(u64, img[128..136], 0, .little);
+    std.mem.writeInt(u64, img[136..144], 0x401000, .little);
+    std.mem.writeInt(u64, img[152..160], 64, .little);
+    std.mem.writeInt(u64, img[160..168], 64, .little);
+    const v = try elf64.validate(&img);
+    try std.testing.expectEqual(@as(u64, 0x400000), v.entry);
+    try std.testing.expectEqual(@as(usize, 2), v.nsegs);
+    const entry_pc = try elf64.load(&v);
+    try std.testing.expectEqual(@as(u64, 0x400000), entry_pc);
+    // VMAs registered with loader prot
+    const text_vma = mm.findVma(0x400000).?;
+    try std.testing.expect(text_vma.prot & mm.PROT_EXEC != 0);
+    const data_vma = mm.findVma(0x401000).?;
+    try std.testing.expect(data_vma.prot & mm.PROT_WRITE != 0);
+    try std.testing.expect(data_vma.prot & mm.PROT_EXEC == 0); // W^X
+    // entry inside RX (uaccess-exec gate analog)
+    try std.testing.expect(text_vma.start <= entry_pc and entry_pc < text_vma.end);
+    // stack: map top 16K of 8M window over real backing, build argv/env
+    var stack_back: [16384]u8 align(4096) = [_]u8{0} ** 16384;
+    const stack_base = userstack.STACK_TOP - userstack.STACK_SIZE;
+    _ = mm.mmap(stack_base, userstack.STACK_SIZE, mm.PROT_READ | mm.PROT_WRITE, mm.MAP_PRIVATE | mm.MAP_ANONYMOUS | mm.MAP_FIXED) orelse return error.NoMem;
+    const backing_virt = stack_base + userstack.STACK_SIZE - 16384;
+    // build into tail of real backing, pretending it sits at stack top
+    const sp = try userstack.build(&stack_back, backing_virt, &.{"/workspace/tool"}, &.{ "LANG=C", "USER=sandbox" });
+    try std.testing.expect(sp % 16 == 8);
+    try std.testing.expect(sp >= backing_virt and sp < backing_virt + 16384);
+    // rejection battery: dynamic type, interp, kernel vaddr, bad entry
+    std.mem.writeInt(u16, img[16..18], 3, .little); // ET_DYN
+    try std.testing.expectError(error.NotStatic, elf64.validate(&img));
+    std.mem.writeInt(u16, img[16..18], 2, .little);
+    std.mem.writeInt(u32, img[120..124], 3, .little); // PT_INTERP
+    try std.testing.expectError(error.NeedsInterp, elf64.validate(&img));
+    std.mem.writeInt(u32, img[120..124], 1, .little);
+    std.mem.writeInt(u64, img[136..144], 0xFFFF8000001000, .little); // kernel half
+    try std.testing.expectError(error.KernelAddr, elf64.validate(&img));
+}
+
+test "m3: exit/wait lifecycle + stdout/stderr split via dispatch" {
+    const entry_mod = @import("arch/x86_64/entry.zig");
+    const sc = @import("syscall.zig");
+    const capture = proc_mod.capture;
+    proc_mod.init();
+    sc.init();
+    mm.init();
+    defer mm.init();
+    // fork → waitpid WNOHANG on running child returns 0; unknown pid → ECHILD
+    const child = proc_mod.fork();
+    try std.testing.expect(child != 0);
+    try std.testing.expectEqual(@as(isize, 0), entry_mod.dispatch(sc.NR.waitpid, child, 0, 1, 0)); // WNOHANG
+    try std.testing.expectEqual(@as(isize, -10), entry_mod.dispatch(sc.NR.waitpid, 99999, 0, 1, 0)); // ECHILD
+    // stdout/stderr split: fd1/fd2 captured per-pid, validated user pointers
+    var region: [256]u8 align(4096) = [_]u8{0} ** 256;
+    _ = mm.mmap(@intFromPtr(&region[0]), region.len, mm.PROT_READ, mm.MAP_PRIVATE | mm.MAP_ANONYMOUS | mm.MAP_FIXED) orelse return error.NoMem;
+    const pid = proc_mod.getpid();
+    capture.reset(pid);
+    @memcpy(region[0..9], "out-data\n");
+    @memcpy(region[64..73], "err-data\n");
+    try std.testing.expectEqual(@as(isize, 9), entry_mod.dispatch(sc.NR.write, 1, @intFromPtr(&region[0]), 9, 0));
+    try std.testing.expectEqual(@as(isize, 9), entry_mod.dispatch(sc.NR.write, 2, @intFromPtr(&region[64]), 9, 0));
+    try std.testing.expectEqualStrings("out-data\n", capture.stdoutOf(pid));
+    try std.testing.expectEqualStrings("err-data\n", capture.stderrOf(pid));
+    // bad pointer → -EFAULT, streams untouched
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.write, 1, 0x1000, 9, 0));
+    try std.testing.expectEqual(@as(usize, 9), capture.stdoutOf(pid).len);
+    capture.reset(pid);
+    proc_mod.init();
+}
+
 test "net: AF_UNIX socketpair loopback" {
     skbuff.init(); net_core.init(); socket_mod.init();
     var pair: [2]i32 = undefined;
