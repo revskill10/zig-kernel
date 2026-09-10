@@ -7,7 +7,9 @@ const gdt = @import("arch/i386/gdt.zig");
 const idt = @import("arch/i386/idt.zig");
 const paging = @import("arch/i386/paging.zig");
 const virtio_blk = @import("drivers/block/virtio_blk.zig");
+const blk_queue = @import("drivers/block/blk_queue.zig");
 const ext4 = @import("fs/ext4.zig");
+const page_cache = @import("mm/page_cache.zig");
 // init_loader.zig is hosted-only (uses std/vfs); baremetal demo probes inline.
 
 const SERIAL_COM1: u16 = 0x3F8;
@@ -453,6 +455,35 @@ fn kmain() callconv(.c) void {
         serial_write("' (");
         serial_writeUsize(rn);
         serial_write("B from sector 4)\n");
+        // p2-io: queue + page cache + inode/extent/dir walk
+        blk_queue.init();
+        page_cache.init();
+        var qbuf: [512]u8 = [_]u8{0} ** 512;
+        const qslot = blk_queue.submit(.read, 2, &qbuf) catch 9999;
+        serial_write("blk: queue read sector2 slot=");
+        serial_writeUsize(qslot);
+        serial_write(" pending=");
+        serial_writeUsize(blk_queue.pending());
+        serial_write(" magic=");
+        serial_writeHexByte(qbuf[56]);
+        serial_writeHexByte(qbuf[57]);
+        serial_write(if (qbuf[56] == 0x53 and qbuf[57] == 0xEF) " ok\n" else " MISMATCH\n");
+        const pg = page_cache.read_page(5, 0, blk_reader) catch {
+            serial_write("mm: page cache read FAILED\n");
+            break :blk_demo;
+        };
+        _ = pg;
+        const st = page_cache.stats();
+        serial_write("mm: page cache miss= ");
+        serial_writeUsize(st.misses);
+        serial_write(" hit=");
+        serial_writeUsize(st.hits);
+        serial_write("\n");
+        _ = page_cache.read_page(5, 0, blk_reader) catch break :blk_demo;
+        const st2 = page_cache.stats();
+        serial_write("mm: page cache reread hit=");
+        serial_writeUsize(st2.hits);
+        serial_write("\n");
     }
 
     // --- ELF init loader demo (t5e): probe disk sector 0 for ELF magic ---
