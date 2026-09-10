@@ -59,4 +59,15 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run kernel unit tests");
     test_step.dependOn(&run_tests.step);
+
+    // Supervisor (M4 host-side, Linux target; pure policy testable on host)
+    const sup_mod = b.createModule(.{
+        .root_source_file = b.path("supervisor/main.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    const sup_tests = b.addTest(.{ .root_module = sup_mod });
+    const run_sup_tests = b.addRunArtifact(sup_tests);
+    const sup_test_step = b.step("test-supervisor", "Run supervisor unit tests");
+    sup_test_step.dependOn(&run_sup_tests.step);
 }
