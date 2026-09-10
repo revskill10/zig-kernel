@@ -67,32 +67,50 @@ pub fn getPTE(vaddr: usize) u32 {
 
 // handle_mm_fault: Linux-like, called from #PF handler with CR2 fault addr + error code.
 // error_code bits: 0=P,1=W,2=U,3=RSVD,4=I.
-// Bring-up policy: kernel-only, no user tasks yet. Supervisor faults get identity RW.
-// User-origin faults (U set) are REJECTED with -13 EACCES, install nothing (Qodo #2).
+// Kernel-only entry: supervisor faults get identity RW; user-origin (U set)
+// REJECTED with -13 EACCES, nothing installed (Qodo #2). Use
+// handle_mm_fault_user when the mm layer authorized the address via VMA.
 // Returns 0 ok, -12 ENOMEM out of window, -13 EACCES user fault, -14 EFAULT bogus.
-// ponytail: fixed 64 PT identity RW only, no VMA permission checks, no swap/COW. ceiling: VMA + perms + alloc frame via buddy.
+// ponytail: fixed 64 PT identity RW only, no swap/COW here (mm.zig owns VMA/COW).
+// ceiling: PTE-level COW refs + swap entries.
 pub fn handle_mm_fault(fault_addr: u32, error_code: u32) isize {
+    if ((error_code & 0x4) != 0) return -13; // -EACCES: use _user variant after VMA auth
+    return mapIdentity(fault_addr, false);
+}
+
+fn mapIdentity(fault_addr: u32, user: bool) isize {
     const pd: usize = @as(usize, @intCast(fault_addr >> 22));
     const pt: usize = @as(usize, @intCast((fault_addr >> 12) & 0x3FF));
     const frame: u32 = fault_addr & 0xFFFFF000;
-
     if (pd >= MAX_PT) return -12;
     if (pd >= 1024) return -14;
-
-    if ((error_code & 0x4) != 0) return -13; // -EACCES: no user mappings in bring-up
-
+    const ubit: u32 = if (user) 0x4 else 0;
     if ((page_directory[pd] & 0x1) == 0) {
-        page_directory[pd] = @as(u32, @truncate(@intFromPtr(&page_tables[pd][0]) & 0xFFFFF000)) | 0x3;
+        page_directory[pd] = @as(u32, @truncate(@intFromPtr(&page_tables[pd][0]) & 0xFFFFF000)) | 0x3 | ubit;
+    } else if (user) {
+        page_directory[pd] |= 0x4;
     }
     const pte = &page_tables[pd][pt];
     if ((pte.* & 0x1) == 0) {
-        pte.* = frame | 0x3;
+        pte.* = frame | 0x3 | ubit;
     } else {
         pte.* |= 0x2;
+        if (user) pte.* |= 0x4;
     }
     invlpg(@intCast(fault_addr));
     pf_handled += 1;
     return 0;
+}
+
+/// User-authorized fault: installs a U-bit PTE, but ONLY when the caller
+/// (mm layer) already validated the address against a VMA (findVma + prot).
+/// user_allowed=false behaves exactly like handle_mm_fault (reject U).
+/// No imports: paging stays freestanding-safe; mm.zig owns VMA policy.
+/// ponytail: identity frame (no frame allocator yet); ceiling: buddy frame.
+pub fn handle_mm_fault_user(fault_addr: u32, error_code: u32, user_allowed: bool) isize {
+    const is_user = (error_code & 0x4) != 0;
+    if (is_user and !user_allowed) return -13;
+    return mapIdentity(fault_addr, is_user);
 }
 
 const std = @import("std");
@@ -132,4 +150,22 @@ test "paging: isMapped for identity region" {
     paging_init();
     try std.testing.expect(isMapped(0x00100000));
     try std.testing.expect(!isMapped(0x07000000));
+}
+
+test "paging: handle_mm_fault_user maps U-bit when authorized" {
+    paging_init();
+    const rc = handle_mm_fault_user(0x05000000, 0x6, true);
+    try std.testing.expect(rc == 0);
+    try std.testing.expect(isMapped(0x05000000));
+    try std.testing.expect((getPTE(0x05000000) & 0x4) != 0); // U bit set
+    try std.testing.expect((getPDE(0x05000000) & 0x4) != 0);
+}
+
+test "paging: handle_mm_fault_user rejects unauthorized U fault" {
+    paging_init();
+    const before = pf_handled;
+    const rc = handle_mm_fault_user(0x05000000, 0x6, false);
+    try std.testing.expect(rc == -13);
+    try std.testing.expect(!isMapped(0x05000000));
+    try std.testing.expect(pf_handled == before);
 }

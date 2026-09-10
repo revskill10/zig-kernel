@@ -20,6 +20,9 @@ pub const VmArea = struct {
     prot: u32,
     is_shared: bool = false,
     file: ?*anyopaque = null,
+    // p1-mm: copy-on-write state (Linux vm_area_struct anon_vma analog, VMA granularity).
+    cow: bool = false,
+    cow_pages: u32 = 0,
 };
 
 // Memory protection flags (matching Linux)
@@ -33,6 +36,10 @@ pub const MAP_SHARED: u32 = 0x01;
 pub const MAP_PRIVATE: u32 = 0x02;
 pub const MAP_FIXED: u32 = 0x10;
 pub const MAP_ANONYMOUS: u32 = 0x20;
+
+// p1-mm: frame reserve pool (Linux min_free_kbytes analog). Normal allocPage
+// refuses when free pages would drop to RESERVE_PAGES; allocPageAtomic bypasses.
+pub const RESERVE_PAGES: usize = 256;
 
 var pages: [MAX_PAGES]Page = blk: {
     @setEvalBranchQuota(100000);
@@ -55,7 +62,18 @@ fn isPageSet(idx: usize) bool {
     return (page_bitmap[idx / 8] & (@as(u8, 1) << @as(u3, @intCast(idx % 8)))) != 0;
 }
 
-pub fn allocPage() ?*Page {
+fn freeCount() usize {
+    var n: usize = 0;
+    for (pages) |p| { if (!p.in_use) n += 1; }
+    return n;
+}
+
+pub fn reserveFree() usize {
+    const f = freeCount();
+    return if (f > RESERVE_PAGES) f - RESERVE_PAGES else 0;
+}
+
+fn allocPageInner() ?*Page {
     for (&pages, 0..) |*p, i| {
         if (!p.in_use) {
             p.in_use = true;
@@ -65,6 +83,16 @@ pub fn allocPage() ?*Page {
         }
     }
     return null;
+}
+
+pub fn allocPage() ?*Page {
+    if (freeCount() <= RESERVE_PAGES) return null;
+    return allocPageInner();
+}
+
+/// Bypass the reserve watermark (IRQ/atomic context analog). Use sparingly.
+pub fn allocPageAtomic() ?*Page {
+    return allocPageInner();
 }
 
 pub fn freePage(p: *Page) void {
@@ -213,6 +241,47 @@ pub fn mprotect(addr: usize, len: usize, prot: u32) i32 {
         _ = i;
     }
     return -1;
+}
+
+/// Find the VMA containing addr, or null.
+pub fn findVma(addr: usize) ?*VmArea {
+    for (&vm_areas) |*slot| {
+        if (slot.*) |*vma| {
+            if (addr >= vma.start and addr < vma.end) return vma;
+        }
+    }
+    return null;
+}
+
+pub fn vmaCount() usize { return vm_area_count; }
+
+/// Mark overlapping MAP_PRIVATE VMAs copy-on-write (fork analog: parent + child
+/// share, write fault copies). Returns number of VMAs marked.
+pub fn markCowRange(addr: usize, len: usize) usize {
+    const end = addr + len;
+    var n: usize = 0;
+    for (&vm_areas) |*slot| {
+        if (slot.*) |*vma| {
+            if (addr < vma.end and end > vma.start and (vma.flags & MAP_PRIVATE) != 0) {
+                vma.cow = true;
+                vma.cow_pages = @as(u32, @intCast((vma.end - vma.start) / PAGE_SIZE));
+                n += 1;
+            }
+        }
+    }
+    return n;
+}
+
+/// Handle a write fault inside a COW VMA: allocate the private copy.
+/// Returns the new page, or null when addr is not in a COW VMA.
+/// ponytail: VMA-granularity accounting (no per-PTE refs); ceiling: PTE-level.
+pub fn cowFault(addr: usize) ?*Page {
+    const vma = findVma(addr) orelse return null;
+    if (!vma.cow) return null;
+    const np = allocPageAtomic() orelse return null;
+    if (vma.cow_pages > 0) vma.cow_pages -= 1;
+    if (vma.cow_pages == 0) vma.cow = false;
+    return np;
 }
 
 pub fn vmmInit() void {
