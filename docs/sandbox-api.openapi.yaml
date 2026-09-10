@@ -1,0 +1,370 @@
+openapi: 3.1.0
+info:
+  title: zig-kernel Sandbox API
+  version: 1.0.0
+  description: |
+    Agent sandbox public API (M1 contract freeze).
+    Transport: Unix socket on Linux host first. Remote requires authenticated transport.
+    All sandbox-scoped ops check ownership. Mutating ops are idempotent via Idempotency-Key.
+servers:
+  - url: http://localhost
+tags:
+  - name: sandboxes
+  - name: executions
+  - name: files
+  - name: events
+paths:
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      summary: Supported backends, ABIs, images, features, ceilings
+      responses:
+        '200':
+          description: capabilities
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Capabilities'
+  /v1/sandboxes:
+    post:
+      operationId: createSandbox
+      summary: Create sandbox session from immutable image
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SandboxCreate'
+      responses:
+        '202':
+          description: accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /v1/sandboxes/{id}:
+    get:
+      operationId: getSandbox
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sandbox' }
+          description: sandbox
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: destroySandbox
+      summary: Idempotent destroy of VM + writable storage
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sandbox' }
+          description: destroyed
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/sandboxes/{id}/executions:
+    post:
+      operationId: startExecution
+      summary: Start executable (accepted only when sandbox ready)
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExecutionCreate' }
+      responses:
+        '202':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Execution' }
+          description: accepted
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /v1/sandboxes/{id}/executions/{execId}:
+    get:
+      operationId: getExecution
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - name: execId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Execution' }
+          description: execution
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/sandboxes/{id}/executions/{execId}/cancel:
+    post:
+      operationId: cancelExecution
+      summary: Idempotent cancel, host-escalated
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: execId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Execution' }
+          description: cancelled/cancelling
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/sandboxes/{id}/events:
+    get:
+      operationId: getEvents
+      summary: Ordered output + lifecycle events (poll; SSE upgrade optional)
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - name: after
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+          description: exclusive cursor
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventPage' }
+          description: events
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/sandboxes/{id}/files:
+    put:
+      operationId: uploadFile
+      summary: Bounded upload into writable workspace
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+          description: workspace-absolute path e.g. /workspace/tool
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FileMeta' }
+          description: stored
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+    get:
+      operationId: downloadFile
+      summary: Bounded workspace download
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: file bytes
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/sandboxes/{id}/reset:
+    post:
+      operationId: resetSandbox
+      summary: Terminate execution, recreate session from original image. Bumps generation.
+      parameters:
+        - $ref: '#/components/parameters/SandboxId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sandbox' }
+          description: reset complete
+        '404': { $ref: '#/components/responses/Error' }
+components:
+  parameters:
+    SandboxId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, minLength: 8, maxLength: 128 }
+      description: Required on mutating ops except where noted. Same key + same body = replay. Same key + different body = 409.
+  responses:
+    Error:
+      description: error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Capabilities:
+      type: object
+      required: [backends, guest_abis, images, features, ceilings]
+      properties:
+        backends:
+          type: array
+          items: { type: string, enum: [qemu] }
+        guest_abis:
+          type: array
+          items: { type: string }
+          example: [zk-abi-v1]
+        images:
+          type: array
+          items: { $ref: '#/components/schemas/ImageMeta' }
+        features:
+          type: object
+          properties:
+            network_modes: { type: array, items: { type: string, enum: [none] } }
+            snapshots: { type: boolean }
+            forks: { type: boolean }
+            sse: { type: boolean }
+        ceilings:
+          $ref: '#/components/schemas/Limits'
+    ImageMeta:
+      type: object
+      required: [id, digest, abi, created]
+      properties:
+        id: { type: string, example: zig-native-v1 }
+        digest: { type: string, description: sha256 of reproducible image }
+        abi: { type: string, example: zk-abi-v1 }
+        created: { type: string, format: date-time }
+    Limits:
+      type: object
+      properties:
+        vcpus: { type: integer, minimum: 1, maximum: 8, default: 1 }
+        memory_mib: { type: integer, minimum: 32, maximum: 4096, default: 128 }
+        workspace_mib: { type: integer, minimum: 8, maximum: 1024, default: 32 }
+        processes: { type: integer, minimum: 1, maximum: 64, default: 16 }
+        execution_timeout_ms: { type: integer, minimum: 1000, maximum: 600000, default: 60000 }
+        session_ttl_seconds: { type: integer, minimum: 60, maximum: 86400, default: 900 }
+        output_bytes: { type: integer, minimum: 65536, maximum: 16777216, default: 1048576 }
+    NetworkPolicy:
+      type: object
+      required: [mode]
+      properties:
+        mode: { type: string, enum: [none] }
+    SandboxCreate:
+      type: object
+      required: [image]
+      properties:
+        image: { type: string }
+        limits: { $ref: '#/components/schemas/Limits' }
+        network:
+          $ref: '#/components/schemas/NetworkPolicy'
+          default: { mode: none }
+    Sandbox:
+      type: object
+      required: [id, image, image_digest, state, generation, limits, network, created_at, expires_at]
+      properties:
+        id: { type: string }
+        image: { type: string }
+        image_digest: { type: string }
+        state: { type: string, enum: [creating, ready, busy, resetting, expired, destroying, destroyed] }
+        generation: { type: integer, minimum: 1 }
+        limits: { $ref: '#/components/schemas/Limits' }
+        network: { $ref: '#/components/schemas/NetworkPolicy' }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        usage:
+          $ref: '#/components/schemas/Usage'
+    ExecutionCreate:
+      type: object
+      required: [generation, argv]
+      properties:
+        generation: { type: integer, minimum: 1 }
+        argv: { type: array, items: { type: string }, minItems: 1, maxItems: 64 }
+        cwd: { type: string, default: /workspace }
+        env: { type: object, additionalProperties: { type: string }, maxProperties: 64 }
+        stdin_base64: { type: string, default: '' }
+        timeout_ms: { type: integer, minimum: 100, maximum: 600000 }
+    Execution:
+      type: object
+      required: [id, sandbox_id, generation, state, argv]
+      properties:
+        id: { type: string }
+        sandbox_id: { type: string }
+        generation: { type: integer }
+        state: { type: string, enum: [queued, running, cancelling, done] }
+        argv: { type: array, items: { type: string } }
+        result:
+          $ref: '#/components/schemas/ExecResult'
+        usage:
+          $ref: '#/components/schemas/Usage'
+    ExecResult:
+      type: object
+      required: [terminal]
+      properties:
+        terminal:
+          type: string
+          enum: [exited, cancelled, timeout, resource_limit, output_limit, guest_failure]
+        exit_code: { type: integer, nullable: true }
+        reason: { type: string }
+    Usage:
+      type: object
+      properties:
+        cpu_ms: { type: integer }
+        peak_rss_mib: { type: integer }
+        output_bytes: { type: integer }
+        wall_ms: { type: integer }
+    EventPage:
+      type: object
+      required: [events, next_cursor]
+      properties:
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/Event' }
+        next_cursor: { type: integer }
+    Event:
+      type: object
+      required: [seq, generation, type]
+      properties:
+        seq: { type: integer }
+        generation: { type: integer }
+        exec_id: { type: string, nullable: true }
+        type:
+          type: string
+          enum: [stdout, stderr, lifecycle, exit]
+        data_base64: { type: string }
+        message: { type: string }
+    FileMeta:
+      type: object
+      required: [path, size, sha256]
+      properties:
+        path: { type: string }
+        size: { type: integer }
+        sha256: { type: string }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        detail: { type: object }

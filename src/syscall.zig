@@ -11,6 +11,7 @@ const proc_mod = @import("proc/proc.zig");
 const mm_mod = @import("mm/mm.zig");
 const stat_mod = @import("stat/stat.zig");
 const time_mod = @import("time/time.zig");
+const uaccess = @import("uaccess.zig"); // M2: user-pointer validation gate
 
 pub const NR = entry.NR;
 
@@ -87,7 +88,15 @@ pub fn init() void {
     printk.printk(.info, "syscall: 66-entry table registered (vinix parity)", .{});
 }
 
-// ── Helper: c-string to slice ──
+// ── Helper: checked c-string from user pointer (M2: -EFAULT on bad ptr) ──
+var path_buf: [512]u8 = undefined;
+fn userPath(ptr: usize) ?[]const u8 {
+    const n = uaccess.copyCStrFromUser(ptr, &path_buf) orelse return null;
+    return path_buf[0..n];
+}
+
+// Legacy helper: kernel-trusted pointers only (tests, init). Syscall handlers
+// must use userPath / uaccess.validate, never this.
 fn ptrToSlice(ptr: usize) ?[]const u8 {
     if (ptr == 0) return null;
     const cstr = @as([*:0]const u8, @ptrFromInt(ptr));
@@ -102,7 +111,7 @@ fn sys_kprint(a0: usize, a1: usize, a2: usize, a3: usize) callconv(.c) isize {
 }
 
 fn sys_openat(dirfd: usize, path_ptr: usize, flags: usize, mode: usize) callconv(.c) isize {
-    const path = ptrToSlice(path_ptr) orelse return -22;
+    const path = userPath(path_ptr) orelse return -14; // -EFAULT
     const f = vfs.openat(@intCast(dirfd), path, @intCast(flags), @intCast(mode)) orelse return -2;
     const fd = proc_mod.allocFd(f) orelse return -24;
     return @intCast(fd);
@@ -110,6 +119,7 @@ fn sys_openat(dirfd: usize, path_ptr: usize, flags: usize, mode: usize) callconv
 
 fn sys_read(fd: usize, buf_ptr: usize, len: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
+    if (!uaccess.validate(buf_ptr, len, true)) return -14;
     const f = proc_mod.fdAt(@intCast(fd)) orelse return -9;
     const buf = @as([*]u8, @ptrFromInt(buf_ptr))[0..len];
     return vfs.read(f, buf);
@@ -117,6 +127,7 @@ fn sys_read(fd: usize, buf_ptr: usize, len: usize, _a3: usize) callconv(.c) isiz
 
 fn sys_write(fd: usize, buf_ptr: usize, len: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
+    if (!uaccess.validate(buf_ptr, len, false)) return -14;
     const f = proc_mod.fdAt(@intCast(fd)) orelse return -9;
     const data = @as([*]const u8, @ptrFromInt(buf_ptr))[0..len];
     return vfs.write(f, data);
@@ -399,17 +410,23 @@ fn sys_signalfd(fd: usize, sigmask_ptr: usize, sigset_size: usize, _a3: usize) c
 
 // ── Memory management syscalls ──
 fn sys_mmap(addr: usize, len: usize, prot: usize, flags: usize) callconv(.c) isize {
+    // M2: fixed mappings confined to user half; anon (addr=0) takes kernel-assigned base.
+    if (addr != 0 and !entry.gdt.isUserRange(addr, len)) return -22; // -EINVAL
     const result = mm_mod.mmap(@intCast(addr), len, @intCast(prot), @intCast(flags));
     return if (result == null) -12 else @intCast(result.?); // -ENOMEM
 }
 
 fn sys_munmap(addr: usize, len: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a2; _ = _a3;
+    // M2: unmap confined to user half.
+    if (!entry.gdt.isUserRange(addr, len)) return -22;
     return @intCast(mm_mod.munmap(@intCast(addr), len));
 }
 
 fn sys_mprotect(addr: usize, len: usize, prot: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
+    // M2: protect confined to user half.
+    if (!entry.gdt.isUserRange(addr, len)) return -22;
     return @intCast(mm_mod.mprotect(@intCast(addr), len, @intCast(prot)));
 }
 
@@ -436,6 +453,8 @@ fn sys_clock_get(clk_id: usize, tp_ptr: usize, _a2: usize, _a3: usize) callconv(
     _ = _a2; _ = _a3;
     const ts_ns = time_mod.monotonicNs();
     if (tp_ptr != 0) {
+        // M2: validate user out-pointer before write.
+        if (!uaccess.validate(tp_ptr, @sizeOf(time_mod.TimeSpec), true)) return -14;
         const tp = @as(*time_mod.TimeSpec, @ptrFromInt(tp_ptr));
         tp.tv_sec = @divTrunc(@as(i64, @intCast(ts_ns)), 1_000_000_000);
         tp.tv_nsec = @intCast(ts_ns % 1_000_000_000);
@@ -447,7 +466,9 @@ fn sys_clock_get(clk_id: usize, tp_ptr: usize, _a2: usize, _a3: usize) callconv(
 fn sys_nanosleep(req_ptr: usize, rem_ptr: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = rem_ptr; _ = _a2; _ = _a3;
     if (req_ptr != 0) {
-        const req = @as(*const time_mod.TimeSpec, @ptrFromInt(req_ptr));
+        // M2: validate user in-pointer before read.
+        var req: time_mod.TimeSpec = undefined;
+        if (!uaccess.copyFromUser(std.mem.asBytes(&req), req_ptr)) return -14;
         const ns: i64 = req.tv_sec * 1_000_000_000 + req.tv_nsec;
         if (ns > 0) {
             time_mod.nsleep(ns);
