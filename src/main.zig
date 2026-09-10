@@ -722,6 +722,51 @@ test "m3: exit/wait lifecycle + stdout/stderr split via dispatch" {
     proc_mod.init();
 }
 
+test "m5: jail confines, quota contains, reset wipes" {
+    vfs.init();
+    defer {
+        vfs.clearJail();
+        vfs.init();
+    }
+    // jail auto-creates /workspace
+    try std.testing.expect(vfs.setJail("/workspace"));
+    const used0 = vfs.fsUsed();
+    try std.testing.expect(used0 > 0); // seed files charged
+    // file inside jail resolvable; outside denied
+    _ = vfs.createFile("/workspace/tool", "binary-bytes") orelse return error.NoMem;
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/workspace/tool") != null);
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/etc/hostname") == null); // escape denied
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/hello.txt") == null); // outside jail
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/workspace/../hello.txt") == null); // .. denied
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/") == null); // root denied
+    // jail root itself + relative resolve work
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/workspace") != null);
+    // symlink targets never followed: readlink returns target, lookup stays put
+    _ = vfs.createFile("/workspace/link", "x") orelse return error.NoMem;
+    // quota: over-cap write fails ENOSPC without allocating; small IO still works
+    {
+        const f = vfs.openat(vfs.AT_FDCWD, "/workspace/tool", vfs.O_RDONLY, 0) orelse return error.NoMem;
+        defer vfs.close(f);
+        const flood = std.heap.page_allocator.alloc(u8, vfs.FS_CAP_BYTES + 1) catch return error.NoMem;
+        defer std.heap.page_allocator.free(flood);
+        @memset(flood, 'F');
+        try std.testing.expectEqual(@as(isize, -28), vfs.write(f, flood)); // ENOSPC, contained
+        var small: [8]u8 = undefined;
+        _ = vfs.seek(f, 0, vfs.SEEK_SET);
+        try std.testing.expect(vfs.read(f, &small) > 0); // reads unaffected
+    }
+    const used_before = vfs.fsUsed();
+    try std.testing.expect(used_before >= used0);
+    // reset wipes jail contents, frees accounting, seed files outside jail survive
+    const removed = vfs.clearJailContents();
+    try std.testing.expect(removed >= 2);
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/workspace/tool") == null);
+    try std.testing.expect(vfs.fsUsed() < used_before);
+    try std.testing.expect(vfs.lookup("/hello.txt") != null); // outside jail survives
+    vfs.clearJail();
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/hello.txt") != null); // jail lifted
+}
+
 test "net: AF_UNIX socketpair loopback" {
     skbuff.init(); net_core.init(); socket_mod.init();
     var pair: [2]i32 = undefined;
