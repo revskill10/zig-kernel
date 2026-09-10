@@ -375,6 +375,59 @@ test "ext4: inode + extent + dirent walk" {
     try T.expectError(error.DirEnd, ext4.read_dirent(Img.read, 20, 32));
 }
 
+test "mm: reserve watermark + atomic bypass" {
+    mm.init();
+    try std.testing.expect(mm.reserveFree() == mm.MAX_PAGES - mm.RESERVE_PAGES);
+    var n: usize = 0;
+    while (mm.allocPage() != null) n += 1;
+    try std.testing.expectEqual(mm.MAX_PAGES - mm.RESERVE_PAGES, n);
+    try std.testing.expect(mm.allocPage() == null);
+    try std.testing.expect(mm.reserveFree() == 0);
+    // atomic bypasses the watermark into the reserve
+    const a = mm.allocPageAtomic() orelse return error.NoMem;
+    const b = mm.allocPageAtomic() orelse return error.NoMem;
+    mm.freePage(a);
+    // freed atomic slot is reusable via atomic path
+    const c = mm.allocPageAtomic() orelse return error.NoMem;
+    mm.freePage(b);
+    mm.freePage(c);
+    // reserve back at floor: normal alloc still refused
+    try std.testing.expect(mm.allocPage() == null);
+    mm.init();
+    try std.testing.expect(mm.allocPage() != null);
+    mm.init();
+}
+
+test "mm: vma find + cow mark/fault lifecycle" {
+    mm.init();
+    const base = mm.mmap(0, 8192, mm.PROT_READ | mm.PROT_WRITE, mm.MAP_PRIVATE | mm.MAP_ANONYMOUS) orelse return error.NoMem;
+    try std.testing.expect(mm.findVma(base + 4096) != null);
+    try std.testing.expect(mm.findVma(base + 8192) == null);
+    try std.testing.expectEqual(@as(usize, 1), mm.markCowRange(base, 8192));
+    try std.testing.expectEqual(@as(usize, 0), mm.markCowRange(base + 0x10000000, 4096));
+    const vma = mm.findVma(base).?;
+    try std.testing.expect(vma.cow);
+    const before = mm.usedPages();
+    const p1 = mm.cowFault(base) orelse return error.NoMem;
+    const p2 = mm.cowFault(base + 4096) orelse return error.NoMem;
+    try std.testing.expect(mm.usedPages() == before + 2);
+    try std.testing.expect(!vma.cow);
+    try std.testing.expect(mm.cowFault(base + 0x10000000) == null);
+    mm.freePage(p1);
+    mm.freePage(p2);
+    try std.testing.expect(mm.munmap(base, 8192) == 0);
+    mm.init();
+}
+
+test "mm: cow skips MAP_SHARED vmas" {
+    mm.init();
+    const sh = mm.mmap(0, 4096, mm.PROT_READ | mm.PROT_WRITE, mm.MAP_SHARED | mm.MAP_ANONYMOUS) orelse return error.NoMem;
+    try std.testing.expectEqual(@as(usize, 0), mm.markCowRange(sh, 4096));
+    try std.testing.expect(mm.cowFault(sh) == null);
+    try std.testing.expect(mm.munmap(sh, 4096) == 0);
+    mm.init();
+}
+
 test "syscall: open/read dispatch" {
     vfs.init();
     const entry_mod = @import("arch/x86_64/entry.zig");
