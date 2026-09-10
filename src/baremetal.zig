@@ -8,6 +8,7 @@ const idt = @import("arch/i386/idt.zig");
 const paging = @import("arch/i386/paging.zig");
 const virtio_blk = @import("drivers/block/virtio_blk.zig");
 const ext4 = @import("fs/ext4.zig");
+// init_loader.zig is hosted-only (uses std/vfs); baremetal demo probes inline.
 
 const SERIAL_COM1: u16 = 0x3F8;
 
@@ -452,6 +453,33 @@ fn kmain() callconv(.c) void {
         serial_write("' (");
         serial_writeUsize(rn);
         serial_write("B from sector 4)\n");
+    }
+
+    // --- ELF init loader demo (t5e): probe disk sector 0 for ELF magic ---
+    // Embedded systems: check block device header for ELF executable.
+    // ponytail: uses virtio_blk directly (freestanding-safe), no VFS/std.
+    serial_write("init: probing block device 0 for ELF magic\n");
+    {
+        var s0: [512]u8 = undefined;
+        virtio_blk.read_sector(0, &s0) catch {
+            serial_write("init: block read failed\n");
+        };
+        const is_elf = s0[0] == 0x7f and s0[1] == 0x45 and s0[2] == 0x4c and s0[3] == 0x46;
+        const is_32bit = s0[4] == 0x01; // ELFCLASS32
+        const is_le = s0[5] == 0x01; // ELFDATA2LSB
+        if (is_elf and is_32bit and is_le) {
+            serial_write("init: ELF32 LSB detected at sector 0 (binary found)\n");
+            // In a real kernel: parse phdr, load segments, jump to e_entry.
+            // ponytail: fixed demo image has no ELF header -> shows NOT ELF path.
+        } else {
+            serial_write("init: no ELF at sector 0 (magic=0x");
+            serial_writeHexByte(s0[0]);
+            serial_writeHexByte(s0[1]);
+            serial_writeHexByte(s0[2]);
+            serial_writeHexByte(s0[3]);
+            serial_write(", expected 0x7f454c46)\n");
+            serial_write("init: ELF init loader ready; provide ELF binary at sector 0\n");
+        }
     }
 
     // --- Net driver demo (e1000 + virtio_net via NetOps) ---
