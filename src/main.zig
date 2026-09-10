@@ -31,7 +31,9 @@ const caps = @import("security/caps.zig");
 const e1000 = @import("drivers/net/e1000.zig");
 const virtio_net = @import("drivers/net/virtio_net.zig");
 const virtio_blk = @import("drivers/block/virtio_blk.zig");
+const blk_queue = @import("drivers/block/blk_queue.zig");
 const ext4 = @import("fs/ext4.zig");
+const page_cache = @import("mm/page_cache.zig");
 const proc_mod = @import("proc/proc.zig");
 const time_mod = @import("time/time.zig");
 const stat_mod = @import("stat/stat.zig");
@@ -289,6 +291,88 @@ test "net: virtio_net xmit → netif_rx via virtqueue" {
     const n = net_core.recvFromQueue(&buf).?;
     try std.testing.expect(n == 6);
     try std.testing.expectEqualStrings("VIRTIO", buf[0..n]);
+}
+
+test "blk: queue submit read/write + full" {
+    try virtio_blk.init();
+    blk_queue.init();
+    var buf: [512]u8 = [_]u8{0} ** 512;
+    const slot = try blk_queue.submit(.read, 2, &buf);
+    try std.testing.expect(slot < blk_queue.depth());
+    try std.testing.expectEqual(@as(usize, 0), blk_queue.pending());
+    try std.testing.expectEqual(@as(u8, 0x53), buf[56]);
+    try std.testing.expectEqual(@as(u8, 0xEF), buf[57]);
+    var w: [512]u8 = [_]u8{0x5A} ** 512;
+    _ = try blk_queue.submit(.write, 63, &w);
+    var back: [512]u8 = undefined;
+    _ = try blk_queue.submit(.read, 63, &back);
+    try std.testing.expectEqualSlices(u8, &w, &back);
+    try std.testing.expectError(error.OutOfRange, blk_queue.submit(.read, 64, &back));
+}
+
+test "mm: page cache hit/miss + flush" {
+    try virtio_blk.init();
+    page_cache.init();
+    const R = struct {
+        fn read(lba: u64, out: []u8) !void {
+            if (out.len != 512 or lba >= 64) return error.BadLen;
+            try virtio_blk.read_sector(@as(u32, @intCast(lba)), @as(*[512]u8, @ptrCast(out.ptr)));
+        }
+    };
+    const W = struct {
+        fn write(lba: u64, data: []u8) !void {
+            if (data.len != 512 or lba >= 64) return error.BadLen;
+            try virtio_blk.write_sector(@as(u32, @intCast(lba)), @as(*const [512]u8, @ptrCast(data.ptr)));
+        }
+    };
+    const p0 = try page_cache.read_page(5, 0, R.read);
+    try std.testing.expectEqual(@as(u8, 0x53), p0.data[56]);
+    const s0 = page_cache.stats();
+    try std.testing.expectEqual(@as(usize, 0), s0.hits);
+    try std.testing.expectEqual(@as(usize, 1), s0.misses);
+    _ = try page_cache.read_page(5, 0, R.read);
+    const s1 = page_cache.stats();
+    try std.testing.expectEqual(@as(usize, 1), s1.hits);
+    page_cache.mark_dirty(5, 0);
+    try std.testing.expect(try page_cache.flush_one(5, 0, W.write));
+    try std.testing.expect(!(try page_cache.flush_one(5, 0, W.write)));
+}
+
+test "ext4: inode + extent + dirent walk" {
+    const T = @import("std").testing;
+    const Img = struct {
+        fn read(lba: u64, out: []u8) !void {
+            if (out.len != 512) return error.UnexpectedRead;
+            @memset(out, 0);
+            switch (lba) {
+                8 => {
+                    out[0] = 33; out[1] = 0; out[2] = 0; out[3] = 0;
+                    out[4] = 20; out[5] = 0; out[6] = 0; out[7] = 0;
+                    out[8] = 30; out[9] = 0; out[10] = 0; out[11] = 0;
+                    out[52] = 40; out[53] = 0; out[54] = 0; out[55] = 0;
+                },
+                80 => { out[0] = 50; },
+                40 => {
+                    out[0] = 2; out[1] = 0; out[2] = 0; out[3] = 0;
+                    out[4] = 1;
+                    out[5] = 'h'; out[6] = 'i'; out[7] = 0;
+                    out[32] = 0;
+                },
+                else => {},
+            }
+        }
+    };
+    const ino = try ext4.read_inode(Img.read, 1);
+    try T.expectEqual(@as(u32, 33), ino.size);
+    try T.expectEqual(@as(u32, 20), try ext4.file_block_to_disk(Img.read, ino, 0));
+    try T.expectEqual(@as(u32, 30), try ext4.file_block_to_disk(Img.read, ino, 1));
+    try T.expectEqual(@as(u32, 50), try ext4.file_block_to_disk(Img.read, ino, 12));
+    try T.expectError(error.BadInode, ext4.read_inode(Img.read, 0));
+    const e0 = try ext4.read_dirent(Img.read, 20, 0);
+    try T.expectEqual(@as(u32, 2), e0.ino);
+    try T.expectEqualStrings("hi", e0.name[0..e0.name_len]);
+    try T.expectError(error.DirEnd, ext4.read_dirent(Img.read, 20, 1));
+    try T.expectError(error.DirEnd, ext4.read_dirent(Img.read, 20, 32));
 }
 
 test "syscall: open/read dispatch" {
