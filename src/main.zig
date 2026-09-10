@@ -767,6 +767,73 @@ test "m5: jail confines, quota contains, reset wipes" {
     try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/hello.txt") != null); // jail lifted
 }
 
+test "m7: adversarial — elf mutations, wild pointers, pid isolation" {
+    const elf64 = proc_mod.elf64;
+    // elf64 mutation fuzz: valid image + random byte flips → error only, never panic
+    var img: [512]u8 = [_]u8{0} ** 512;
+    img[0] = 0x7f;
+    img[1] = 'E';
+    img[2] = 'L';
+    img[3] = 'F';
+    img[4] = 2;
+    img[5] = 1;
+    img[6] = 1;
+    std.mem.writeInt(u16, img[16..18], 2, .little);
+    std.mem.writeInt(u16, img[18..20], 62, .little);
+    std.mem.writeInt(u32, img[20..24], 1, .little);
+    std.mem.writeInt(u64, img[24..32], 0x400000, .little);
+    std.mem.writeInt(u64, img[32..40], 64, .little);
+    std.mem.writeInt(u16, img[52..54], 64, .little);
+    std.mem.writeInt(u16, img[54..56], 56, .little);
+    std.mem.writeInt(u16, img[56..58], 1, .little);
+    std.mem.writeInt(u32, img[64..68], 1, .little);
+    std.mem.writeInt(u32, img[68..72], 5, .little);
+    std.mem.writeInt(u64, img[80..88], 0x400000, .little);
+    std.mem.writeInt(u64, img[96..104], 128, .little);
+    std.mem.writeInt(u64, img[104..112], 128, .little);
+    try std.testing.expect((elf64.validate(&img) catch null) != null);
+    var st: u64 = 0x243F6A8885A308D3;
+    var iter: usize = 0;
+    while (iter < 20_000) : (iter += 1) {
+        st ^= st << 13;
+        st ^= st >> 7;
+        st ^= st << 17;
+        var mut = img;
+        const flips = 1 + (st % 4);
+        var f: usize = 0;
+        while (f < flips) : (f += 1) {
+            st ^= st << 13;
+            st ^= st >> 7;
+            st ^= st << 17;
+            mut[@as(usize, @intCast(st % mut.len))] = @truncate(st >> 32);
+        }
+        if (elf64.validate(&mut)) |_| {} else |_| {}
+    }
+    // wild-pointer sweep: every region rejects without deref (no VMA mapped here)
+    mm.init();
+    defer mm.init();
+    const probes = [_]usize{ 0, 1, 0xFFF, 0x1000, 0x20000000, 0x7FFFFFFFF000, 0x7FFFFFFFFFFF, 0x800000000000, 0xFFFF800000000000, 0xFFFFFFFFFFFFFFFF };
+    var tmp: [16]u8 = undefined;
+    for (probes) |p| {
+        try std.testing.expect(!uaccess.validate(p, 16, false));
+        try std.testing.expect(!uaccess.validate(p, 16, true));
+        try std.testing.expect(!uaccess.copyFromUser(&tmp, p));
+        try std.testing.expect(uaccess.copyCStrFromUser(p, &tmp) == null);
+    }
+    // capture pid isolation under flood: streams never cross
+    const cap = proc_mod.capture;
+    cap.reset(1);
+    cap.reset(2);
+    _ = cap.writeStdout(1, "p1-out");
+    _ = cap.writeStderr(2, "p2-err");
+    try std.testing.expectEqualStrings("p1-out", cap.stdoutOf(1));
+    try std.testing.expectEqual(@as(usize, 0), cap.stderrOf(1).len);
+    try std.testing.expectEqualStrings("p2-err", cap.stderrOf(2));
+    try std.testing.expectEqual(@as(usize, 0), cap.stdoutOf(2).len);
+    cap.reset(1);
+    cap.reset(2);
+}
+
 test "net: AF_UNIX socketpair loopback" {
     skbuff.init(); net_core.init(); socket_mod.init();
     var pair: [2]i32 = undefined;

@@ -252,6 +252,20 @@ pub const Service = struct {
         if (s.sess.state == .destroyed or s.sess.state == .destroying) return error.Gone;
         var rel: [workspace.MAX_PATH]u8 = undefined;
         const r = workspace.resolve(path, &rel) catch return error.BadRequest;
+        // overwrite same path (idempotent PUT): release old size first
+        for (&s.files) |*f| {
+            if (f.used and f.path_len == r.len and std.mem.eql(u8, f.path[0..f.path_len], r)) {
+                s.ws.release(f.size);
+                s.ws.charge(size) catch {
+                    s.ws.charge(f.size) catch {};
+                    return error.Limit;
+                };
+                f.size = size;
+                f.sha = sha;
+                try self.pushEvent(s, 0, .lifecycle, 0);
+                return;
+            }
+        }
         s.ws.charge(size) catch return error.Limit;
         errdefer s.ws.release(size);
         for (&s.files) |*f| {

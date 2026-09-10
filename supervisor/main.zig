@@ -9,6 +9,7 @@ pub const frame = @import("frame.zig");
 pub const qemu = @import("qemu.zig");
 pub const workspace = @import("workspace.zig"); // M5 path confinement + quota
 pub const api = @import("api.zig"); // M6 public API service logic
+pub const adversarial = @import("adversarial.zig"); // M7 host adversarial suite
 
 test {
     _ = policy;
@@ -17,4 +18,5 @@ test {
     _ = qemu;
     _ = workspace;
     _ = api;
+    _ = adversarial;
 }
