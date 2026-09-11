@@ -33,8 +33,8 @@ jobs:
         run: |
           zig build test-supervisor --summary all 2>&1 | tee supervisor-test-output.log
           test ${PIPESTATUS[0]} -eq 0
-          # count gate: at least the 25 committed supervisor tests (25 jail/runtime/qemu hardened)
-          grep -Eq "25 pass|25/25" supervisor-test-output.log || { echo "supervisor test count gate failed"; exit 1; }
+          # count gate: at least 26 committed supervisor tests (M7 time-overflow qualification).
+          grep -Eq "2[6-9] pass|[3-9][0-9] pass|[1-9][0-9]{2,} pass|2[6-9]/2[6-9]|[3-9][0-9]/[3-9][0-9]|[1-9][0-9]{2,}/[1-9][0-9]{2,}" supervisor-test-output.log || { echo "supervisor test count gate failed"; exit 1; }
 
       - name: Validate OpenAPI contract
         run: |
