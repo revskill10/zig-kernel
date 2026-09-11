@@ -4,6 +4,14 @@
 const std = @import("std");
 const policy = @import("policy.zig");
 
+fn saturatingAdd(a: u64, b: u64) u64 {
+    return std.math.add(u64, a, b) catch std.math.maxInt(u64);
+}
+
+fn saturatingMul(a: u64, b: u64) u64 {
+    return std.math.mul(u64, a, b) catch std.math.maxInt(u64);
+}
+
 pub const State = enum {
     creating,
     ready,
@@ -36,7 +44,7 @@ pub const Session = struct {
         if (self.state != .ready) return error.BadState;
         if (generation != self.generation) return error.StaleGeneration;
         self.state = .busy;
-        self.exec_deadline_ms = now_ms + self.limits.execution_timeout_ms;
+        self.exec_deadline_ms = saturatingAdd(now_ms, self.limits.execution_timeout_ms);
     }
 
     pub fn finishExec(self: *Session, generation: u64) !void {
@@ -52,7 +60,7 @@ pub const Session = struct {
     }
 
     pub fn expiresAt(self: *const Session) u64 {
-        return self.created_ms + self.limits.session_ttl_seconds * 1000;
+        return saturatingAdd(self.created_ms, saturatingMul(self.limits.session_ttl_seconds, 1000));
     }
 
     pub fn isExpired(self: *const Session, now_ms: u64) bool {
@@ -120,4 +128,17 @@ test "session: expiry + destroy idempotency guard" {
     try s.finishDestroy();
     try std.testing.expect(s.state == .destroyed);
     try std.testing.expectError(error.BadState, s.beginDestroy()); // already gone
+}
+
+test "session: deadlines saturate under hostile clock values" {
+    const max = std.math.maxInt(u64);
+    var s = try Session.init(1, .{}, max - 1);
+    try s.onGuestReady();
+    try s.startExec(1, max - 1);
+    try std.testing.expectEqual(max, s.exec_deadline_ms);
+    try std.testing.expect(!s.execTimedOut(max - 1));
+    try std.testing.expect(s.execTimedOut(max));
+    try std.testing.expectEqual(max, s.expiresAt());
+    try std.testing.expect(!s.isExpired(max - 1));
+    try std.testing.expect(s.isExpired(max));
 }
