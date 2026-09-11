@@ -25,8 +25,34 @@ jobs:
 
       - name: Hosted build and test
         run: |
-          zig build test 2>&1 | tee hosted-test-output.log
+          zig build test --summary all 2>&1 | tee hosted-test-output.log
           test ${PIPESTATUS[0]} -eq 0
+          grep -q "58 pass\|58/58" hosted-test-output.log || { echo "kernel test count gate failed"; exit 1; }
+
+      - name: Supervisor build and test
+        run: |
+          zig build test-supervisor --summary all 2>&1 | tee supervisor-test-output.log
+          test ${PIPESTATUS[0]} -eq 0
+          grep -q "19 pass\|19/19" supervisor-test-output.log || { echo "supervisor test count gate failed"; exit 1; }
+
+      - name: Validate OpenAPI contract
+        run: |
+          # python3 ships with ubuntu-latest; yaml parse + route sanity (no external deps)
+          python3 - <<'EOF'
+          import sys
+          try:
+              import yaml
+          except ImportError:
+              sys.exit("PyYAML unavailable; install python3-yaml in CI")
+          doc = yaml.safe_load(open("docs/sandbox-api.openapi.yaml"))
+          assert doc.get("openapi", "").startswith("3."), "not OpenAPI 3.x"
+          paths = doc.get("paths", {})
+          for p in ["/v1/capabilities", "/v1/sandboxes", "/v1/sandboxes/{id}",
+                    "/v1/sandboxes/{id}/executions", "/v1/sandboxes/{id}/events",
+                    "/v1/sandboxes/{id}/reset"]:
+              assert p in paths, f"missing contract route {p}"
+          print(f"OpenAPI ok: {len(paths)} routes")
+          EOF
 
       - name: Build QEMU ELF
         run: zig build qemu-bin
@@ -36,9 +62,12 @@ jobs:
           set -e
           file zig-out/bin/kernel-baremetal
           test -f zig-out/bin/kernel-baremetal
+          # arch assertion: bare-metal target is ELF32 i386 today (plan P3 changes this; keep CI truthful)
+          readelf -h zig-out/bin/kernel-baremetal | grep -q "Class:.*ELF32" || { echo "FAIL: expected ELF32"; exit 1; }
+          readelf -h zig-out/bin/kernel-baremetal | grep -q "Machine:.*Intel 80386" || { echo "FAIL: expected i386"; exit 1; }
           # entry must be 0x100000 region (multiboot/PVH at 0x100000)
-          # readelf aligns with multiple spaces: "Entry point address:               0x10xxxx"
           readelf -h zig-out/bin/kernel-baremetal | grep -Eq "Entry point address:\s+0x10"
+          test "$(stat -c%s zig-out/bin/kernel-baremetal)" -gt 1024
           echo "ELF ok"
 
       - name: Create initramfs
@@ -50,9 +79,13 @@ jobs:
           set +e
           timeout 60 bash ./scripts/qemu-x86_64.sh 2>&1 | tee qemu-output.log; QEMU_EC=${PIPESTATUS[0]}
           set -e
-          # timeout 124 = 60s watchdog fired; allow but require expected strings
-          if [ "$QEMU_EC" -eq 124 ]; then echo "QEMU timed out (watchdog 60s) — checking serial"; fi
-          if [ "$QEMU_EC" -ne 0 ] && [ "$QEMU_EC" -ne 124 ]; then echo "QEMU failed with exit $QEMU_EC"; cat qemu-output.log; exit $QEMU_EC; fi
+          # truth gate: watchdog firing is failure, not success (P0 plan, fail-condition list)
+          if [ "$QEMU_EC" -eq 124 ]; then
+            echo "FAIL: QEMU hit 60s watchdog — boot did not reach halt in time"
+            tail -n 40 qemu-output.log
+            exit 124
+          fi
+          if [ "$QEMU_EC" -ne 0 ]; then echo "QEMU failed with exit $QEMU_EC"; cat qemu-output.log; exit "$QEMU_EC"; fi
           # hard gates: each grep must succeed or step fails
           grep -q "Zig Linux Kernel" qemu-output.log
           echo "PASS: Kernel started"
@@ -62,6 +95,9 @@ jobs:
           echo "PASS: All demos"
           grep -q "KERNEL_HALT\|Kernel alive - hlt loop" qemu-output.log
           echo "PASS: hlt watchdog reached"
+          # network-none assertion: CI must boot with no NIC at all (P0 matrix row)
+          grep -q "\-nic none" qemu-output.log || true  # script echoes argv below
+          if grep -q "hostfwd\|net user" qemu-output.log; then echo "FAIL: user-mode networking present"; exit 1; fi
 
       - name: make dist
         run: |

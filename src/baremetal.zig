@@ -621,8 +621,12 @@ fn kmain() callconv(.c) void {
     serial_write("subsystems: sched | mm | vfs | drivers | net | security\n");
     serial_write("serial: COM1 0x3F8 ready\n");
     serial_write("Demo complete. Bare-metal checks passed.\n");
-    serial_write("Kernel alive - hlt loop. Power off via QEMU monitor.\n");
     serial_write("KERNEL_HALT\n");
+    // QEMU isa-debug-exit device: write port 0xf4 → QEMU exits with (val<<1)|1.
+    // CI truth gate: reaching halt must terminate QEMU, not rely on a watchdog kill.
+    // Hostile fallback: if the device is absent, hlt forever and the host watchdog fails CI.
+    serial_write("Powering off QEMU via isa-debug-exit.\n");
+    outb(0xf4, 0);
     while (true) {
         asm volatile ("hlt");
     }
