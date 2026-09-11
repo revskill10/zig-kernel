@@ -35,7 +35,7 @@ mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sysfs /sys 2>/dev/null || true
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 
-echo "[init] Zephyr kernel initialized in QEMU"
+echo "[init] Zig kernel initialized in QEMU"
 
 # Run the kernel binary if available (for standalone testing)
 if [ -x /kernel ]; then
