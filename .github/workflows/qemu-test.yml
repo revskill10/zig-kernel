@@ -85,7 +85,8 @@ jobs:
             tail -n 40 qemu-output.log
             exit 124
           fi
-          if [ "$QEMU_EC" -ne 0 ]; then echo "QEMU failed with exit $QEMU_EC"; cat qemu-output.log; exit "$QEMU_EC"; fi
+          if [ "$QEMU_EC" -ne 0 ] && [ "$QEMU_EC" -ne 3 ]; then echo "QEMU failed with exit $QEMU_EC"; cat qemu-output.log; exit "$QEMU_EC"; fi
+          # isa-debug-exit with exit code 0 → QEMU exit status (0<<1)|1 = 3: clean kernel-requested poweroff
           # hard gates: each grep must succeed or step fails
           grep -q "Zig Linux Kernel" qemu-output.log
           echo "PASS: Kernel started"
