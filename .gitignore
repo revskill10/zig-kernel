@@ -38,3 +38,13 @@ initramfs/
 .zig-tool.exe
 *.exe
 *.pdb
+
+# qualification run artifacts
+qemu-kvm-output.log
+qemu-kvm-receipt.txt
+qemu-gate-output.log
+release-gate-receipt.txt
+probe-out.log
+initramfs/
+initramfs.cpio
+qemu-output.log
