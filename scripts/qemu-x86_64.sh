@@ -74,6 +74,9 @@ echo -e "${GREEN}Launching QEMU...${NC}"
 echo "========================================"
 
 # Launch QEMU with serial monitor
+# Sandbox posture (P0 plan): no NIC at all until egress is a designed feature.
+# Serial goes to a pipe-friendly stdio; -no-reboot so crashes exit instead of looping.
+echo "QEMU argv: -nic none (network disabled by policy)"
 qemu-system-x86_64 \
     -kernel "$KERNEL_BIN" \
     -initrd initramfs.cpio \
@@ -83,8 +86,7 @@ qemu-system-x86_64 \
     -m 256M \
     -cpu qemu64 \
     -smp 2 \
-    -net nic,model=e1000,id=net0 \
-    -net user,hostfwd=tcp::20128-:20128 \
+    -nic none \
     -no-reboot \
     -display none
 
