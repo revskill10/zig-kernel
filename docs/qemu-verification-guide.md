@@ -2,11 +2,12 @@
 
 ## Quick Summary
 
-**Current State**: Hosted kernel tests pass 58/58 and supervisor policy tests pass
-19/19 when their test executables are run directly. `zig build qemu-bin` produces
+**Current State**: Hosted kernel tests pass 58/58. The supervisor has 25
+cross-platform tests plus 3 Linux-only pidfd lifecycle tests. `zig build qemu-bin` produces
 the committed ELF32 i386 artifact (`kernel-baremetal`, entry `0x10000c`). Runtime
 QEMU boot is a Linux/CI gate; it is not verified by the Windows development
-runner. The supervisor remains policy/API logic, not a production daemon.
+runner. The supervisor now includes a Linux pidfd process-lifecycle slice, but
+remains policy/API logic rather than a production daemon.
 
 **Goal**: Enable bare-metal QEMU testing for zig-kernel with both e1000 and virtio-net drivers.
 

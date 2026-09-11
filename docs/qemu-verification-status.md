@@ -78,9 +78,11 @@ Demo complete. Bare-metal checks passed.
 
 ## Remaining qualification
 
-The host supervisor's VM lifecycle, Unix-socket transport, and guest API are
-not implemented yet. Hosted policy tests therefore do not constitute production
-sandbox isolation; Linux/KVM/QEMU qualification remains a required gate.
+The host supervisor now has a Linux exact-argv spawn path with a CLOEXEC exec
+handshake and pidfd-backed kill/reap tests. Unix-socket transport, cgroup and
+namespace application, guest API wiring, and full Linux/KVM/QEMU qualification
+are not implemented yet. Hosted policy tests and the pidfd slice therefore do
+not constitute production sandbox isolation.
 
 ## References
 - `../omarchy/waku-os/board/waku/qemu/` - Omarchy QEMU profile

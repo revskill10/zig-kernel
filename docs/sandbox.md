@@ -1,16 +1,18 @@
 # zig-kernel Agent Sandbox — Master Doc
 
-Status: M1-M7 hosted contracts and policy foundations implemented. Production
-Linux supervisor and guest qualification remain outstanding.
+Status: M1-M7 hosted contracts and policy foundations implemented. M7b now has
+Linux pidfd-backed exact-argv process lifecycle coverage; production QEMU guest
+transport and full supervisor orchestration remain outstanding.
 Contracts: `sandbox-api.openapi.yaml` (public API) + `sandbox-abi.md` (zk-abi-v1 + guest protocol).
 
 ## 1. Baseline
 
-- Hosted kernel qualification: 58/58 direct test cases pass; supervisor: 19/19.
+- Hosted kernel qualification: 58/58 direct test cases pass; supervisor has 25
+  cross-platform tests plus 3 Linux-only pidfd lifecycle tests.
 - QEMU artifact builds: `kernel-baremetal` 45496B via `zig build qemu-bin`.
 - Tree clean at `f5c5edc` (signal RT fix included).
-- Linux CI/QEMU runtime qualification is still pending; Windows is not the
-  production supervisor target.
+- Linux CI executes the pidfd lifecycle tests; full QEMU/KVM supervisor runtime
+  qualification is still pending. Windows is not the production supervisor target.
 - Current bare-metal target is **32-bit**: kernel-only GDT entries, identity paging.
   No isolated user execution yet. This is Milestone 2's job.
 - Hosted syscall simulation does not intercept arbitrary programs (no gVisor-style trap).
@@ -37,6 +39,8 @@ Contracts: `sandbox-api.openapi.yaml` (public API) + `sandbox-abi.md` (zk-abi-v1
   No per-process sets. LSM hook is a stub.
 - `src/baremetal.zig`: multiboot + Xen note, COM1 serial, GDT/IDT/paging,
   QEMU `-kernel` load at 0x100000. Real CPU boundary, no orchestration.
+- `supervisor/runtime.zig`: Linux exact-argv spawn, no-new-privileges,
+  requested UID/GID transition, CLOEXEC exec handshake, pidfd kill/reap.
 
 Missing for sandbox use: namespaces, seccomp filter, resource limits, FS jail,
 net policy, snapshot/reset, timeout kill, guest agent API, audit.
@@ -173,7 +177,7 @@ Each milestone ends with acceptance checks + scoped commit.
 | 4. Host supervisor | QEMU lifecycle, private control channel, host deadlines/quotas, admission control, crash cleanup. | Infinite loops + unresponsive guest killed externally. Partial creation + supervisor restart leave no orphan VM. |
 | 5. Isolated workspaces | Immutable base image, bounded writable storage, file transfer, reset, cross-session separation. | Traversal/symlink escapes fail; disk exhaustion contained; reset removes prior files + processes. |
 | 6. Public API | Auth, ownership, idempotency, event streaming, bounded retention, cancel, audit. | Full create → upload → exec → stream → download → reset → destroy via public interface. Concurrent sessions + stale requests tested. |
-| 7. Qualification | Adversarial integration suite, reproducible image, release archive, checksums, ops guide. | Memory exhaustion, process storms, output floods, malformed control msgs, guest crashes, expiry, cleanup — on Linux/KVM. |
+| 7. Qualification | Adversarial integration suite, reproducible image, release archive, checksums, ops guide. | Memory exhaustion, process storms, output floods, malformed control msgs, guest crashes, expiry, cleanup — on Linux/KVM. M7b starts with the real pidfd process lifecycle; QEMU/KVM and guest transport remain. |
 
 After baseline: host-controlled egress → executable compat (selected agent workloads) →
 snapshots/forks. Firecracker = separate backend qualification.

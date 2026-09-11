@@ -33,8 +33,15 @@ jobs:
         run: |
           zig build test-supervisor --summary all 2>&1 | tee supervisor-test-output.log
           test ${PIPESTATUS[0]} -eq 0
-          # count gate: at least the 25 committed supervisor tests (25 jail/runtime/qemu hardened)
-          grep -Eq "25 pass|25/25" supervisor-test-output.log || { echo "supervisor test count gate failed"; exit 1; }
+          # count gate: at least the 28 committed supervisor tests, including
+          # the three Linux pidfd lifecycle tests below.
+          grep -Eq "28 pass|28/28" supervisor-test-output.log || { echo "supervisor test count gate failed"; exit 1; }
+
+      - name: Linux supervisor pidfd lifecycle qualification
+        run: |
+          set -euo pipefail
+          zig test supervisor/main.zig --test-filter "runtime: Linux" 2>&1 | tee supervisor-linux-runtime.log
+          test "${PIPESTATUS[0]}" -eq 0
 
       - name: Validate OpenAPI contract
         run: |
