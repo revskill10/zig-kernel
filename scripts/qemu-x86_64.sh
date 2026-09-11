@@ -87,7 +87,7 @@ qemu-system-x86_64 \
     -cpu qemu64 \
     -smp 2 \
     -nic none \
-    -device isa-debug-exit \
+    -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
     -no-reboot \
     -display none
 
