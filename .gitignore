@@ -28,3 +28,13 @@ Thumbs.db
 
 # Env / secrets
 .env
+
+# Local verification artifacts
+.qemu-verdict.txt
+.qemu-direct.sh
+qemu-output.log
+initramfs.cpio
+initramfs/
+.zig-tool.exe
+*.exe
+*.pdb
