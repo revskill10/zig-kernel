@@ -25,13 +25,13 @@ jobs:
 
       - name: Hosted build and test
         run: |
-          zig build test 2>&1 | tee hosted-test-output.log
+          zig build test --summary all 2>&1 | tee hosted-test-output.log
           test ${PIPESTATUS[0]} -eq 0
           grep -q "58 pass\|58/58" hosted-test-output.log || { echo "kernel test count gate failed"; exit 1; }
 
       - name: Supervisor build and test
         run: |
-          zig build test-supervisor 2>&1 | tee supervisor-test-output.log
+          zig build test-supervisor --summary all 2>&1 | tee supervisor-test-output.log
           test ${PIPESTATUS[0]} -eq 0
           grep -q "19 pass\|19/19" supervisor-test-output.log || { echo "supervisor test count gate failed"; exit 1; }
 
