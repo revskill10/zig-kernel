@@ -256,7 +256,8 @@ pub fn build(b: *std.Build) void {
     });
     ntt_mod.addImport("gdt", h_gdt);
     ntt_mod.addImport("idt", h_idt);
-    const run_ntt = b.addRunArtifact(b.addTest(.{ .root_module = ntt_mod }));
+    // Explicit LLVM is required for these imported/native inline-assembly fixtures across hosts.
+    const run_ntt = b.addRunArtifact(b.addTest(.{ .root_module = ntt_mod, .use_llvm = true }));
     native_test_step.dependOn(&run_ntt.step);
     const ntt_step = b.step("test-native-tables", "Run native GDT/IDT layout fixtures");
     ntt_step.dependOn(&run_ntt.step);
@@ -297,7 +298,7 @@ pub fn build(b: *std.Build) void {
     traps_mod.addImport("gdt", h_gdt);
     traps_mod.addImport("idt", h_idt);
     traps_mod.addImport("alloc_probe", h_alloc_probe);
-    const run_traps = b.addRunArtifact(b.addTest(.{ .root_module = traps_mod }));
+    const run_traps = b.addRunArtifact(b.addTest(.{ .root_module = traps_mod, .use_llvm = true }));
     native_test_step.dependOn(&run_traps.step);
     const h_probes = b.createModule(.{
         .root_source_file = b.path("src/arch/x86_64/native/probes.zig"),
@@ -310,7 +311,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     traps_control.addImport("probes", h_probes);
-    const run_traps_control = b.addRunArtifact(b.addTest(.{ .root_module = traps_control }));
+    const run_traps_control = b.addRunArtifact(b.addTest(.{ .root_module = traps_control, .use_llvm = true }));
     native_test_step.dependOn(&run_traps_control.step);
     const traps_step = b.step("test-native-traps", "Run native trap/alloc-probe hosted fixtures");
     traps_step.dependOn(&run_traps.step);
