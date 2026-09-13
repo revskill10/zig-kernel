@@ -344,6 +344,39 @@ pub fn build(b: *std.Build) void {
     const test_elf64_companion_step = b.step("test-elf64-companion", "Run ELF64 companion identity/span/entry fixtures");
     test_elf64_companion_step.dependOn(&run_elf64_companion.step);
 
+    // KWP3a.1: hosted one-file newc `/init` and static-user ELF parser
+    // contracts. Host-side parse fixtures only; not guest execution.
+    // Not imported by native runtime roots in this slice.
+    const h_initrd_newc = b.createModule(.{
+        .root_source_file = b.path("src/native/initrd_newc.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    const newc_check = b.createModule(.{
+        .root_source_file = b.path("tests/native-user/newc_check.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    newc_check.addImport("initrd_newc", h_initrd_newc);
+    const run_newc = b.addRunArtifact(b.addTest(.{ .root_module = newc_check }));
+    native_test_step.dependOn(&run_newc.step);
+    const h_user_elf = b.createModule(.{
+        .root_source_file = b.path("src/arch/x86_64/native/user_elf.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    const elf_check = b.createModule(.{
+        .root_source_file = b.path("tests/native-user/elf_check.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    elf_check.addImport("user_elf", h_user_elf);
+    const run_user_elf = b.addRunArtifact(b.addTest(.{ .root_module = elf_check }));
+    native_test_step.dependOn(&run_user_elf.step);
+    const user_parsers_step = b.step("test-native-user-parsers", "Run native user parser hosted fixtures");
+    user_parsers_step.dependOn(&run_newc.step);
+    user_parsers_step.dependOn(&run_user_elf.step);
+
     // Host tools: initramfs builder + FAT16 ESP image builder.
     const mkinitramfs_mod = b.createModule(.{
         .root_source_file = b.path("tools/mkinitramfs.zig"),
