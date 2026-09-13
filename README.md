@@ -45,6 +45,27 @@ bash scripts/qemu-x86_64.sh
 The image is a standalone freestanding kernel demo. It does not boot a Linux
 userspace, consume an initramfs, or provide production sandbox isolation.
 
+## Native x86_64 UEFI bootstrap (first slice)
+
+An opt-in native bootstrap is also present: PE32+ UEFI loader, ELF64 payload
+at 2 MiB, 64 MiB FAT16 ESP, and a 108-byte `INITRMF1` smoke envelope. This is
+**not** a Linux replacement, userspace, Alpine rootfs, desktop, Photon, or
+CPL3 product. Hosted `zig build` / `zig build test` remain the default
+simulation path above.
+
+```sh
+zig build native-image
+zig build native-tools
+zig build test-native
+zig build test-native-qualification
+```
+
+The public qualifier (`scripts/qualify-native/qualify.py`) requires the exact
+pinned verifier image and OVMF hashes in `scripts/qualify-native/probe.py`. A
+fresh unpinned Docker build is **unavailable**, not a pass. See
+[docs/native-bootstrap.md](docs/native-bootstrap.md) for ESP paths, QEMU TCG
+positive/negative expectations, and the current qualification boundary.
+
 ## Layout (matches real kernel + Clean Architecture)
 
 ```
@@ -107,6 +128,7 @@ Bare-metal extensions: replace `mmio_mem` with volatile `*E1000Regs @intFromPtr(
 
 - `docs/architecture.md` — layered diagram (ASCII), data-flow VFS↔MM, syscall sequence
 - `docs/driver-guide.md` — e1000 line-by-line + add-your-own-virtio checklist
+- `docs/native-bootstrap.md` — native UEFI/ELF first-slice bootstrap and qualifier
 - `docs/qemu-verification-guide.md` — QEMU setup and bare-metal verification
 - `docs/comparison-vinix-omarchy.md` — Feature matrix vs vinix and Omarchy
 - `../linux-kernel-architecture.md` + `../linux-kernel-diagrams.html` — production analysis that drove this impl
