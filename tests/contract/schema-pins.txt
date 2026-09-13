@@ -1,0 +1,6 @@
+# Pinned Python packages for the AP0/AP1 schema/OpenAPI validator lane.
+# Install into a D: target directory. Do not use C: caches.
+# jsonschema 4.17.3 provides Draft202012Validator without the rpds-py native
+# wheel required by later 4.18+ referencing stacks.
+jsonschema==4.17.3
+PyYAML==6.0.2

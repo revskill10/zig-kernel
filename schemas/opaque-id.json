@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zig-sandbox.local/schemas/opaque-id.json",
+  "title": "Opaque protocol identifier",
+  "type": "string",
+  "minLength": 1,
+  "maxLength": 128,
+  "pattern": "^[A-Za-z0-9._:-]*[A-Za-z._:-][A-Za-z0-9._:-]*(?![\\s\\S])",
+  "description": "Protocol string identifier. All-digit spellings, empty strings, and strings longer than 128 bytes are rejected."
+}

@@ -1,0 +1,21 @@
+# Independent production-contract status mapping. Not served by the diagnostic bootstrap.
+# code|http_status|retryable
+invalid_request|400|false
+unauthenticated|401|false
+forbidden|403|false
+not_found|404|false
+conflict|409|false
+stale_generation|409|false
+idempotency_conflict|409|false
+cursor_expired|410|false
+payload_too_large|413|false
+unsupported_host|422|false
+unsupported_image|422|false
+limit|429|false
+unsupported|501|false
+capacity|503|true
+unavailable|503|true
+deadline|504|true
+guest_failure|500|false
+resource_limit|500|false
+internal|500|true

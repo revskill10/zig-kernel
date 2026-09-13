@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zig-sandbox.local/schemas/sandbox-create.json",
+  "title": "Sandbox create request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "image"],
+  "properties": {
+    "profile": {
+      "type": "string",
+      "enum": [
+        "linux-vm/x64",
+        "linux-vm/arm64",
+        "wasm-core-p1",
+        "native/linux-x64",
+        "native/macos-arm64",
+        "native/windows-x64",
+        "zk-abi-v1"
+      ]
+    },
+    "image": {
+      "type": "object",
+      "required": ["id", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]*[A-Za-z._:-][A-Za-z0-9._:-]*(?![\\s\\S])"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vcpus": { "$ref": "decimal-u64.json" },
+        "memory_bytes": { "$ref": "decimal-u64.json" },
+        "workspace_bytes": { "$ref": "decimal-u64.json" },
+        "processes": { "$ref": "decimal-u64.json" },
+        "execution_timeout_ms": { "$ref": "decimal-u64.json" },
+        "session_ttl_seconds": { "$ref": "decimal-u64.json" },
+        "output_bytes": { "$ref": "decimal-u64.json" }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["offline"] }
+      }
+    },
+    "rootfs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["cow", "ephemeral", "persistent"] },
+        "volume": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]*[A-Za-z._:-][A-Za-z0-9._:-]*(?![\\s\\S])"
+        }
+      }
+    }
+  }
+}
