@@ -1,0 +1,1 @@
+{"code":"invalid_request","message":"invalid field","request_id":"req_detail1","retryable":false,"detail":{"field":"stdin_base64"}}

@@ -1,0 +1,23 @@
+# Independent JSON rejection vectors: body<TAB>JsonError
+# Malformed JSON number (RFC 8259 exponent without digits).
+{"generation":"1","argv":["/bin/sh"],"stdin_base64":1e+}	InvalidJson
+# Wrong JSON type for a string field.
+{"generation":"1","argv":["/bin/sh"],"stdin_base64":1}	UnexpectedType
+# Invalid standard base64.
+{"generation":"1","argv":["/bin/sh"],"stdin_base64":"***"}	InvalidField
+# Unpadded base64 is rejected.
+{"generation":"1","argv":["/bin/sh"],"stdin_base64":"YQ"}	InvalidField
+# Duplicate keys.
+{"generation":"1","argv":["/bin/sh"],"generation":"2"}	DuplicateField
+# Trailing data after a complete document.
+{"generation":"1","argv":["/bin/sh"]} trailing	InvalidJson
+# Incomplete input.
+{	InvalidJson
+# Lone Unicode surrogate half.
+{"generation":"1","argv":["\ud83d"]}	InvalidJson
+# Numeric generation remains unexpected.
+{"generation":1,"argv":["/bin/sh"]}	UnexpectedType
+# Explicit JSON null is rejected for non-nullable optional properties.
+{"generation":"1","argv":["/bin/true"],"cwd":null}	UnexpectedType
+{"generation":"1","argv":["/bin/true"],"stdin_base64":null}	UnexpectedType
+{"generation":"1","argv":["/bin/true"],"timeout_ms":null}	UnexpectedType

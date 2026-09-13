@@ -1,0 +1,22 @@
+# Independent bootstrap HTTP expectations.
+# method|path|content_length_or_-|status|body_substring|envelope
+GET|/healthz|-|200|"status":"ok"|diagnostic_nested
+HEAD|/healthz|-|200|"status":"ok"|diagnostic_nested
+GET|/readyz|-|503|execution_unavailable|diagnostic_nested
+GET|/v1/capabilities|-|200|"execution":false|diagnostic_nested
+POST|/v1/sandboxes|-|501|execution_unavailable|diagnostic_nested
+POST|/v1/sandboxes?trace=1|-|501|execution_unavailable|diagnostic_nested
+POST|/v1/sandboxes/s1/executions|-|501|execution_unavailable|diagnostic_nested
+POST|/v1/sandboxes/s1/processes|-|501|execution_unavailable|diagnostic_nested
+POST|/v1/sandboxes/s1/terminals|-|501|execution_unavailable|diagnostic_nested
+POST|/v1/sandboxes/s1/channels|-|501|execution_unavailable|diagnostic_nested
+POST|/v1/sandboxes/s1/fetch|-|501|execution_unavailable|diagnostic_nested
+POST|/v1/sandboxes/s1/pause|-|501|execution_unavailable|diagnostic_nested
+POST|/v1/sandboxes/s1/resume|-|501|execution_unavailable|diagnostic_nested
+GET|/v1/sandboxes-else|-|404|not_found|diagnostic_nested
+GET|/v1/exports|-|404|not_found|diagnostic_nested
+POST|/v1/exports|-|404|not_found|diagnostic_nested
+GET|/v1/operations/op_1|-|404|not_found|diagnostic_nested
+POST|/v1/callbacks|-|404|not_found|diagnostic_nested
+POST|/healthz|-|405|method_not_allowed|diagnostic_nested
+POST|/v1/sandboxes|1048577|413|payload_too_large|diagnostic_nested

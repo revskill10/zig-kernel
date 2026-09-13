@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zig-sandbox.local/schemas/error-diagnostic.json",
+  "title": "Diagnostic nested error envelope",
+  "description": "Served by the fail-closed HTTP bootstrap. Not the canonical production envelope.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error"],
+  "properties": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": ["execution_unavailable", "payload_too_large", "not_found", "method_not_allowed", "bad_request"]
+        },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

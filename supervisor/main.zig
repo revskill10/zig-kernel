@@ -11,6 +11,7 @@ pub const jail = @import("jail.zig"); // P2: per-session UID/cgroup/ns/seccomp s
 pub const runtime = @import("runtime.zig"); // P2: pidfd spawn/kill/reap lifecycle
 pub const workspace = @import("workspace.zig"); // M5 path confinement + quota
 pub const api = @import("api.zig"); // M6 public API service logic
+pub const contract = @import("contract.zig");
 pub const adversarial = @import("adversarial.zig"); // M7 host adversarial suite
 
 test {
@@ -22,5 +23,6 @@ test {
     _ = runtime;
     _ = workspace;
     _ = api;
+    _ = contract;
     _ = adversarial;
 }

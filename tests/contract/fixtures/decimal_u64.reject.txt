@@ -1,0 +1,24 @@
+# Independent expected rejects. value<TAB>reason
+	empty
+01	leading_zero
+00	leading_zero
+-1	sign
++1	sign
+1.0	fraction
+1e2	exponent
+1E10	exponent
+ 1	whitespace
+1 	whitespace
+0x10	invalid_digit
+18446744073709551616	overflow
+18446744073709551617	overflow
+18999999999999999999	overflow
+99999999999999999999	overflow
+184467440737095516150	too_long
+1_000	invalid_digit
+0.0	fraction
+--1	sign
+	empty
++0	sign
+-0	sign
+9007199254740993.0	fraction
