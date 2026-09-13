@@ -15,6 +15,14 @@ function Get-FullPath([string]$Path) {
     return [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $Path))
 }
 
+function Test-AllowedOutputPath([string]$Path) {
+    $full = Get-FullPath $Path
+    if ([Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+        return $full.StartsWith("D:", [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    return [System.IO.Path]::IsPathRooted($full)
+}
+
 function Resolve-Python3([string]$Hint) {
     if ($Hint) {
         if (-not (Test-Path -LiteralPath $Hint)) { return $null }
@@ -61,7 +69,7 @@ if (-not $ScratchDir) {
     $ScratchDir = Join-Path $worktree "qualify-native-test-scratch"
 }
 $ScratchDir = Get-FullPath $ScratchDir
-if (-not $ScratchDir.StartsWith("D:", [System.StringComparison]::OrdinalIgnoreCase)) {
+if (-not (Test-AllowedOutputPath $ScratchDir)) {
     Write-Error "scratch must be on D:, got $ScratchDir"
     exit 2
 }

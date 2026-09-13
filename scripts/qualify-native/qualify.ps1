@@ -35,9 +35,12 @@ function Get-FullPath([string]$Path) {
     return [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $Path))
 }
 
-function Test-DPath([string]$Path) {
+function Test-AllowedOutputPath([string]$Path) {
     $full = Get-FullPath $Path
-    return $full.StartsWith("D:", [System.StringComparison]::OrdinalIgnoreCase)
+    if ([Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+        return $full.StartsWith("D:", [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    return [System.IO.Path]::IsPathRooted($full)
 }
 
 function Write-Unavailable([string]$Reason, [string]$Parent) {
@@ -51,7 +54,7 @@ function Write-Unavailable([string]$Reason, [string]$Parent) {
         launched                      = $false
     }
     Write-Host "qualify-native: unavailable - $Reason"
-    if ($Parent -and (Test-DPath $Parent)) {
+    if ($Parent -and (Test-AllowedOutputPath $Parent)) {
         $fullParent = Get-FullPath $Parent
         $stamp = Get-Date -Format "yyyyMMddTHHmmss"
         $dir = Join-Path $fullParent ("native-qualify-" + $stamp + "-ps")
@@ -112,14 +115,14 @@ if (-not $pythonExe) {
 if (-not $EvidenceDir) {
     $EvidenceDir = Join-Path (Get-Location).Path "qualify-native-evidence"
 }
-if (-not (Test-DPath $EvidenceDir)) {
+if (-not (Test-AllowedOutputPath $EvidenceDir)) {
     Write-Unavailable ("output must be on D:, got " + (Get-FullPath $EvidenceDir)) ""
 }
 $EvidenceDir = Get-FullPath $EvidenceDir
 New-Item -ItemType Directory -Force -Path $EvidenceDir | Out-Null
 
 $scratch = Join-Path $EvidenceDir "scratch"
-if (-not (Test-DPath $scratch)) {
+if (-not (Test-AllowedOutputPath $scratch)) {
     Write-Unavailable ("output must be on D:, got " + (Get-FullPath $scratch)) ""
 }
 New-Item -ItemType Directory -Force -Path $scratch | Out-Null
