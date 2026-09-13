@@ -1,0 +1,39 @@
+# Linux hosted native build and qualifier-fixture regression.
+# Not a native boot, QEMU/OVMF, Docker-verifier, desktop, Photon, or
+# Linux-replacement qualification. The locally pinned Docker verifier image
+# is unavailable to ordinary CI and is not run here. Windows-only PowerShell
+# and D-drive tests are not asserted on this Linux job.
+name: Native build and hosted regression
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+permissions:
+  contents: read
+
+jobs:
+  linux-native-build-and-hosted-regression:
+    name: Linux native build and hosted fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Zig 0.16.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Hosted native Zig tests, image, tools, and negative kernels
+        run: zig build test-native native-image native-tools native-kernel-n6-negative native-kernel-n6-restore-fail --summary all
+
+      - name: Hosted native qualifier Python fixtures
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONNOUSERSITE: "1"
+          QUALIFY_TEST_SCRATCH: ${{ github.workspace }}/qualify-native-test-scratch
+        run: python3 -B scripts/qualify-native/run-tests.py
