@@ -137,8 +137,13 @@ evidence every listed route executes.
 ## Roadmap
 
 Not in this checkout: client CLI, execution providers, TypeScript and
-embedded Wasm SDKs and workloads, pluggable filesystems, host mounts, host
-tools, pause/resume, and Linux/Alpine/Vinix/desktop/Photon products.
+embedded Wasm SDKs, pause/resume, durable checkpoints, guest-local CI, or
+Linux/Alpine/Vinix/desktop/Photon products.
+
+Plans only (not runnable):
+[checkpoints](docs/sandbox-checkpoints.md),
+[local CI](docs/sandbox-local-ci.md),
+[smolvm features](audits/smolvm-features.md).
 
 ## Docs
 
@@ -148,3 +153,6 @@ tools, pause/resume, and Linux/Alpine/Vinix/desktop/Photon products.
 - [QEMU](docs/qemu-verification-guide.md) — i386 demo verification
 - [OpenAPI](docs/sandbox-api.openapi.yaml) — diagnostic/planned contract
 - [implementation](docs/sandbox-api-implementation.md) — published diagnostic slice
+- [checkpoints](docs/sandbox-checkpoints.md) — planned capture/store/restore
+- [local CI](docs/sandbox-local-ci.md) — planned act-in-guest
+- [smolvm features](audits/smolvm-features.md) — upstream source inventory
