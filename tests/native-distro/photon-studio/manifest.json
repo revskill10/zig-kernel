@@ -1,0 +1,436 @@
+{
+  "schema": "zk.native-distro.photon-studio.acceptance/v1",
+  "gate_id": "PHOTON-1",
+  "title": "Photon Studio native Flatpak acceptance contract",
+  "production_blocker": true,
+  "implementation_status": "not_implemented",
+  "qualification_status": "not_run",
+  "contract_kind": "acceptance_spec_not_run_evidence",
+  "authored": "2026-09-13",
+  "publication_rebaseline": "2026-09-14",
+  "selected_head": "6c8c8ca0611005e7776f437f381c55a866a67e3c",
+  "never_claim": [
+    "Photon Studio already runs on the native zig-kernel desktop",
+    "native desktop Flatpak is implemented",
+    "this JSON is a pass record",
+    "host Linux or remote/forwarded windows substitute for native evidence",
+    "calculator C1/C2 closes Photon",
+    "D1-only or pure Wayland preview closes Photon",
+    "SDK or BaseApp metadata were installed as extra launch runtimes",
+    "Platform/GL/font/locale commits are known",
+    "filename 0.1.5 is signed provenance",
+    "ARM/Windows/macOS support is proven by this x86_64 bundle",
+    "exact Electron/Chromium versions are known",
+    "home is isolated (home is granted)",
+    "Wayland is the declared launch socket",
+    "upstream electron-wrapper contains no --no-sandbox",
+    "Chromium-inner sandbox is independently proven",
+    "DRI request proves hardware acceleration or a particular Mesa",
+    "inspection-container missing Platform 25.08 proves Flatpak 1.14.10 is incompatible",
+    "static OSTree checkout inherently requires an installed runtime"
+  ],
+  "links": {
+    "spec": "docs/photon-studio.md",
+    "desktop_plan": "docs/desktop-distro.md",
+    "audit_section": "audits/kernel-distro.md#164-photon-studio-flatpak-mandatory-production-gate-photon-001-added-2026-09-13",
+    "contract_readme": "tests/native-distro/photon-studio/README.md",
+    "header_evidence": null,
+    "header_metadata": null,
+    "bundle_inspection": null,
+    "bundle_evidence": null
+  },
+  "private_inspection_receipts": {
+    "class": "not_publicly_available",
+    "note": "Header observation is recorded in this contract and docs/photon-studio.md; private scratch receipts are not published."
+  },
+  "artifact": {
+    "basename": "Photon-Studio-0.1.5-linux-x64.flatpak",
+    "bytes": 282701144,
+    "size_decimal_mb": 282.7,
+    "size_mib": 269.6,
+    "sha256": "49db545b57e9f6c01c063a7f90e774c446a20d10f95b2943263ae5154c077f6a",
+    "header_ref": "app/com.tenzen.photon/x86_64/stable",
+    "arch": "x86_64",
+    "source_path_policy": "operator supplies a local path to this basename; public product identity is basename+bytes+sha256 only; absolute source path lives only in private inspection receipts",
+    "redistribute_into_repo_or_iso": false,
+    "redistribute_basis": "none_recorded",
+    "filename_version_is_signed_provenance": false
+  },
+  "facts": {
+    "observed": {
+      "method": "raw byte scan of bundle header; no Flatpak runtime or application executed",
+      "magic_hex": "666c617470616b00",
+      "magic_ascii": "flatpak\\0",
+      "header_ref": "app/com.tenzen.photon/x86_64/stable",
+      "metadata_extracted_bytes": 448,
+      "application": {
+        "name": "com.tenzen.photon",
+        "runtime": "org.freedesktop.Platform/x86_64/25.08",
+        "sdk": "org.freedesktop.Sdk/x86_64/25.08",
+        "base": "app/org.electronjs.Electron2.BaseApp/x86_64/25.08",
+        "command": "electron-wrapper"
+      },
+      "context": {
+        "shared": ["network", "ipc"],
+        "sockets": ["x11", "pulseaudio"],
+        "devices": ["dri"],
+        "filesystems": ["home", "/media", "/run/media"]
+      },
+      "debug_extension": {
+        "id": "com.tenzen.photon.Debug",
+        "directory": "lib/debug",
+        "autodelete": true,
+        "no_autodownload": true,
+        "listed_in_built_extensions": true
+      },
+      "header_extra_tokens": {
+        "collection_id": "",
+        "ostree_endianness": "l",
+        "static_delta_path_token": "deltas/fz/JJaiONPJIln4LpIxoBDqDCvP89yzTDUlANKFN1CRU/0"
+      },
+      "header_does_not_contain": [
+        "wayland socket",
+        "filesystem=host",
+        "talk-name/own-name D-Bus allowlist",
+        "portal allowlist",
+        "--no-sandbox"
+      ]
+    },
+    "derived": {
+      "bundle_is_app_payload_not_kernel_or_full_runtime_closure": true,
+      "sdk_and_baseapp_metadata_are_not_automatic_launch_runtime_installs": true,
+      "debug_extension_is_not_a_launch_runtime": true,
+      "required_launch_display_socket": "x11",
+      "wayland_not_declared_in_this_header": true,
+      "home_is_granted_so_home_isolation_must_not_be_claimed": true,
+      "arch_support_proven_by_this_blob": ["x86_64"],
+      "arch_support_not_proven_by_this_blob": ["aarch64", "arm", "windows", "macos"],
+      "baseapp_hints_electron": true,
+      "musl_host_does_not_automatically_run_glibc_flatpak": true,
+      "pure_wayland_or_d1_preview_cannot_close_this_gate": true
+    },
+    "unknown": {
+      "app_ostree_commit": null,
+      "provisional_inspection_staging_commit": "7f32496a238d3c92259f82e9231a010ea0c2bcff3dcb34c352500d2853750915",
+      "provisional_inspection_staging_commit_status": "provisional import output only; not a verified installed app commit",
+      "platform_commit": null,
+      "runtime_gl_extension_commits": null,
+      "runtime_font_extension_commits": null,
+      "runtime_locale_extension_commits": null,
+      "resolved_runtime_extension_set": null,
+      "gpg_ostree_signature_result": null,
+      "collection_remote": null,
+      "complete_ostree_file_tree": null,
+      "elf_interpreter_inventory": null,
+      "electron_version": null,
+      "chromium_version": null,
+      "electron_wrapper_implementation": null,
+      "chromium_sandbox_method": null,
+      "actual_runtime_display_choice_x11_vs_wayland": null,
+      "dbus_names": null,
+      "portals_actually_required": null,
+      "desktop_file_name_icon": null,
+      "observed_core_workflows": null,
+      "supported_project_or_document_formats": null,
+      "settings_paths": null,
+      "hardware_vs_software_gl_need": null,
+      "pipewire_native_vs_pulse_socket_need": null,
+      "license_to_redistribute_bundle": null,
+      "note": "Static-only header inspection is recorded in this contract: application not executed; payload/ELF/wrapper/signature unverified; inspection-container missing Platform 25.08 is not proof that static OSTree checkout inherently requires a runtime and not proof Flatpak 1.14.10 is incompatible. Provisional staging commit is not a verified installed app commit. Do not invent commits. Private scratch receipts are not published."
+    }
+  },
+  "permissions_policy": {
+    "honor_declared": true,
+    "do_not_add": ["--no-sandbox", "--filesystem=host", "wayland socket rewrite"],
+    "do_not_assert_unknown_wrapper_lacks_those_flags": true,
+    "do_not_invent_proven_chromium_inner_sandbox": true,
+    "flatpak_outer_containment_must_enforce_declared_grants": true,
+    "entrypoint": "electron-wrapper",
+    "launch_command": "flatpak run com.tenzen.photon",
+    "extracted_binary_shortcut_forbidden": true,
+    "home_granted": true,
+    "authorized_host_mounts": ["home", "/media", "/run/media"],
+    "denial_scope": "selected protected host paths outside explicitly authorized host mounts",
+    "do_not_require_denial_for_valid_runtime_mounts": ["/app", "/usr", "necessary virtual filesystems"],
+    "permission_withdrawal": "contained diagnosable denial or graceful feature degradation; not mandatory whole-app exit; privilege escalation is FAIL",
+    "host_folder_exposure": "sandbox mount authorization only; not arbitrary host bypass",
+    "dbus_allowlists": "do not invent; pin only after observation",
+    "filesystem_adapters": {
+      "swappable_contracts": true,
+      "runtime_deployment_distinct_from_user_mounts": true,
+      "required_semantics": ["permissions", "links", "xattrs", "atomic_rename", "mmap_backing", "durability"],
+      "silent_host_fs_bypass_of_selected_virtual_or_sqlite_mount": "forbidden",
+      "adapter_missing_semantics": "unavailable or failed; no Photon pass on that profile"
+    }
+  },
+  "prerequisites": [
+    {
+      "id": "native-iso-boot",
+      "status": "blocked_prerequisites",
+      "detail": "No native ISO or desktop. As of selected head 6c8c8ca0611005e7776f437f381c55a866a67e3c, bounded native UEFI bootstrap is recorded in docs/native-bootstrap.md with linux_replacement_qualified false; no CPL3, Linux ABI, Alpine, desktop, or Photon. Native CR3 probe is a separate publication."
+    },
+    {
+      "id": "cpl3-glibc-dynamic-loader",
+      "status": "blocked_prerequisites",
+      "detail": "Native x86_64 UAPI and dynamic glibc loader for unmodified Flatpak/OSTree/bubblewrap/Platform/app not implemented. Musl host is not sufficient."
+    },
+    {
+      "id": "namespaces-seccomp",
+      "status": "blocked_prerequisites",
+      "detail": "User/mount/PID/IPC namespaces and seccomp enforcement required; unsupported isolation must fail closed."
+    },
+    {
+      "id": "uapi-ipc-fs",
+      "status": "blocked_prerequisites",
+      "detail": "Process/thread/TLS/futex/signals/epoll/memfd/shm/unix sockets/FD passing; /proc /sys /dev; permissions/xattrs/hardlink/atomic rename/mmap as required by actual runtime. Filesystem adapters are swappable contracts; no silent host-fs bypass of a selected virtual/SQLite mount."
+    },
+    {
+      "id": "flatpak-ostree-bwrap",
+      "status": "blocked_prerequisites",
+      "detail": "Real Flatpak+OSTree deploy/ref/runtime-resolution/trust/transaction/update/rollback/uninstall/offline closure not implemented."
+    },
+    {
+      "id": "x11-launch-lane",
+      "status": "blocked_prerequisites",
+      "detail": "Real Xorg or Xwayland inside native compositor session required. D1-only and pure Wayland cannot close PHOTON-1."
+    },
+    {
+      "id": "pulse-or-pipewire-pulse",
+      "status": "blocked_prerequisites",
+      "detail": "PulseAudio socket or verified PipeWire-Pulse bridge required."
+    },
+    {
+      "id": "dri-or-labelled-software-gl",
+      "status": "blocked_prerequisites",
+      "detail": "Declare and test the selected DRI lane. The DRI request does not prove hardware acceleration, a particular Mesa, or a codec. Software path must not claim hardware."
+    },
+    {
+      "id": "resolved-runtime-closure",
+      "status": "blocked_prerequisites",
+      "detail": "Platform plus actually required GL/font/locale extensions must be resolved and pinned after dependency resolution. Commits currently unknown. SDK/BaseApp not auto-installed."
+    }
+  ],
+  "preserved_stages": {
+    "D1": "required first compositor; cannot close PHOTON-1",
+    "D2": "required Wayland/Hyprland; cannot close PHOTON-1 without X11 socket provision",
+    "C1": "mandatory calculator slice; cannot close PHOTON-1",
+    "C2": "mandatory later GTK4 calculator; cannot close PHOTON-1",
+    "S13": "PHOTON-1 native Flatpak stage in docs/desktop-distro.md; production blocker for P2/S12"
+  },
+  "acceptance_checks": [
+    {
+      "id": "PHOTON-1-bind-iso",
+      "title": "Boot exact native ISO; bind ISO/kernel/rootfs/Flatpak binary, supplied bundle, installed ref/commit, resolved runtime/extension digests",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-install-bundle",
+      "title": "Verified install-bundle; offline only with preseeded full runtime closure",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-info-permissions",
+      "title": "flatpak info and permissions match observed header; command electron-wrapper; no extra permissions",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-signature-trust",
+      "title": "Signature/trust verification result recorded; separate from local file SHA-256; filename version is not provenance",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-launch-cli",
+      "title": "flatpak run com.tenzen.photon as ordinary user; do not add --no-sandbox or extra --filesystem=host; no extracted ELF shortcut; wrapper internals unknown",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-launch-menu",
+      "title": "Launch through native desktop menu",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-provenance",
+      "title": "Native PID/address-space/input/compositor provenance including bwrap and helpers",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-x11-lane",
+      "title": "X11 socket provided by real Xorg or Xwayland in native session; do not rewrite manifest to Wayland",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-window",
+      "title": "Interactive real rendered main window; responsive keyboard/mouse/resize/focus",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-clipboard-filesel",
+      "title": "Second-app clipboard and file selection via native input",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-core-workflow",
+      "title": "Exercise at least one observed core workflow after UI inspection; do not invent a supported project format",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null,
+      "workflow_identity": null,
+      "workflow_identity_class": "unknown"
+    },
+    {
+      "id": "PHOTON-1-authorized-fs",
+      "title": "Real authorized home and media file read/write plus reopen and reboot persistence with checksums",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-fs-adapter-semantics",
+      "title": "Selected filesystem adapter for Flatpak deploy/persist implements permissions/links/xattrs/atomic rename/mmap/durability; no silent host-fs bypass of virtual/SQLite mounts",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-denied-paths",
+      "title": "Denials on selected protected host paths outside authorized host mounts; do not require denial of /app, /usr, or necessary VFS; do not assert home isolation; withdrawal may be graceful degradation",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-network-audio-graphics",
+      "title": "Declared networking/audio/graphics where the app exposes them; DRI hardware claim only with real device; Pulse via PulseAudio or verified PipeWire-Pulse",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-child-cleanup",
+      "title": "Child process cleanup on close; 0 leaked PIDs/FDs on cycle tests",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-namespaces-seccomp-failclosed",
+      "title": "Unsupported required namespace/seccomp/display/runtime yields unavailable or failed, never a successful stub",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-update-rollback-remove-reinstall",
+      "title": "Update/failure rollback/remove/reinstall keep vs purge settings semantics",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    },
+    {
+      "id": "PHOTON-1-quantitative",
+      "title": "Bounded launch/input/cycle/relaunch/soak gates recorded as proposed vs measured",
+      "status": "blocked_prerequisites",
+      "result": null,
+      "evidence": null
+    }
+  ],
+  "lifecycle_semantics_proposed": {
+    "measured": false,
+    "update_success": "new app commit; authorized user files kept",
+    "update_failure_or_interrupt": "previous app commit remains launchable; half-ref is not success",
+    "rollback": "prior app commit launches",
+    "uninstall_keep": "ref absent; Flatpak app-id data kept if that is what Flatpak used",
+    "uninstall_purge": "ref absent; Flatpak app-id data purged",
+    "reinstall_after_keep": "app present; kept data still present",
+    "home_writes_outside_app_id_dirs": "may persist after purge because home is granted; record actual paths; not home isolation",
+    "offline_reinstall": "only with preseeded full runtime/extension closure",
+    "signed_source_policy": "separate from local bundle SHA-256 inspection"
+  },
+  "quantitative_gates": {
+    "baseline": "P1-class QEMU q35/KVM/4vCPU/8GiB unless a Photon RBM amends it; TCG fallback noted",
+    "all_thresholds_are_proposed_not_measured": true,
+    "checks": [
+      {
+        "id": "launch_visible_window_s",
+        "proposed": 15,
+        "comparator": "<=",
+        "measured": null,
+        "status": "not_run"
+      },
+      {
+        "id": "input_to_visible_response_median_s",
+        "proposed": 1,
+        "comparator": "<=",
+        "measured": null,
+        "status": "not_run"
+      },
+      {
+        "id": "wm_cycles",
+        "proposed": 50,
+        "leaked_pids_fds": 0,
+        "delta_rss_mib_max": 1,
+        "measured": null,
+        "status": "not_run"
+      },
+      {
+        "id": "relaunch_consecutive",
+        "proposed": 10,
+        "measured": null,
+        "status": "not_run"
+      },
+      {
+        "id": "soak_graphical_session",
+        "proposed": "parent audits/kernel-distro.md §11.1 24h logged-in graphical session with Photon launched at least once per hour, or recorded Photon RBM amendment",
+        "measured": null,
+        "status": "not_run"
+      }
+    ],
+    "required_row_skip": "FAIL"
+  },
+  "evidence_when_run_exists": {
+    "directory": "tests/native-distro/photon-studio/<run-id>/",
+    "run_directory_exists_today": false,
+    "required": [
+      "installer and flatpak logs",
+      "app+runtime metadata/commits/signature verification result",
+      "source manifest binding ISO/kernel/rootfs/Flatpak binary/bundle hashes",
+      "guest kernel and process tree",
+      "guest HID event stream",
+      "frames/video hashes of the real window",
+      "observed workflow file checksums",
+      "errors/exits/resource metrics",
+      "results.json per check id"
+    ],
+    "forbidden_substitutions": [
+      "host Linux windows",
+      "remote or forwarded windows",
+      "extracted binary outside Flatpak",
+      "capability stubs marked successful",
+      "missing runtime recorded as pass"
+    ],
+    "missing_runtime_or_unsupported_isolation": "explicit unavailable or failed"
+  },
+  "future_status_vocabulary": ["not_run", "blocked_prerequisites", "unavailable", "failed", "passed"],
+  "current_check_status_vocabulary_used": ["not_run", "blocked_prerequisites"],
+  "passed_records_present": false
+}
