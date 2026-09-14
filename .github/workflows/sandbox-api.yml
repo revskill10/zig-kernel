@@ -1,5 +1,6 @@
-# Hosted diagnostic API, Linux listener, pinned schema, and process/container
-# probes. Not an execution, auth, isolation, native-boot, or QEMU/OVMF gate.
+# Hosted diagnostic API, Linux listener, pinned schema, process/container
+# probes, and SQLite amalgamation dependency check. Not an execution, auth,
+# isolation, native-boot, QEMU/OVMF, guest, or contracts.Store gate.
 # Existing native-bootstrap.yml, qemu-test.yml, and release.yml are unchanged.
 name: Sandbox diagnostic API
 
@@ -16,7 +17,7 @@ jobs:
   hosted-api-schema-process:
     name: Hosted API, schema, Linux process
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,6 +26,48 @@ jobs:
         uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+
+      - name: SQLite dependency tests and linux-musl probe
+        run: timeout 900 zig build test-store-dependency store-dependency-probe -Doptimize=ReleaseSafe --summary all
+
+      - name: Hosted seed/reopen probe and :memory: reject
+        run: |
+          set -euo pipefail
+          PROBE="${GITHUB_WORKSPACE}/zig-out/bin/store-dependency-probe"
+          test -x "$PROBE"
+          owned=""
+          cleanup() {
+            case "${owned:-}" in
+              "${TMPDIR:-/tmp}/sqlite-dep."*)
+                rm -rf -- "$owned"
+                owned=""
+                ;;
+            esac
+          }
+          trap cleanup EXIT
+          owned="$(mktemp -d "${TMPDIR:-/tmp}/sqlite-dep.XXXXXX")"
+          test -n "$owned"
+          test -d "$owned"
+          case "$owned" in
+            "${TMPDIR:-/tmp}/sqlite-dep."*) ;;
+            *) echo "refusing unowned temp dir: $owned" >&2; owned=""; exit 1 ;;
+          esac
+          db="${owned}/probe.db"
+          # Exact CLI evidence from tests/store/dependency_check.zig. Mere passed=1 is not enough.
+          want_seed="sqlite_dependency_probe mode=seed version=3.53.4 source_id=2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc journal=wal synchronous=2 foreign_keys=1 omit_load_extension=1 threadsafe=1 integrity=ok count=2 blob=00FF4200 passed=1"
+          want_reopen="sqlite_dependency_probe mode=reopen version=3.53.4 source_id=2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc journal=wal synchronous=2 foreign_keys=1 omit_load_extension=1 threadsafe=1 integrity=ok count=2 blob=00FF4200 passed=1"
+          seed_out="$(timeout 60 "$PROBE" seed "$db")"
+          printf '%s\n' "$seed_out"
+          test "$seed_out" = "$want_seed"
+          reopen_out="$(timeout 60 "$PROBE" reopen "$db")"
+          printf '%s\n' "$reopen_out"
+          test "$reopen_out" = "$want_reopen"
+          mem_rc=0
+          timeout 15 "$PROBE" seed ":memory:" >"${owned}/memory.out" 2>"${owned}/memory.err" || mem_rc=$?
+          test "$mem_rc" = 2
+          test ! -s "${owned}/memory.out"
+          grep -F -q "sqlite_dependency_probe memory-db-rejected" "${owned}/memory.err"
+          echo "sqlite hosted dependency check ok (not contracts.Store, not guest, not control store)"
 
       - name: Hosted sandbox tests and Linux listener
         run: zig build test-sandbox sandbox-api -Doptimize=ReleaseSafe --summary all
