@@ -42,7 +42,7 @@ Backed by existing files, not by SmolVM:
 | Capabilities | [schemas/capabilities-diagnostic.json](../schemas/capabilities-diagnostic.json) | `snapshots: false`, `forks: false`, empty backends/images. |
 | Planned snapshot routes | [docs/sandbox-api.openapi.yaml](../docs/sandbox-api.openapi.yaml) `POST /v1/sandboxes/{id}/snapshots` and `/restore` | `x-bootstrap-status: 501`. OpenAPI is a portable planned contract, not execution. |
 | Engine seams | [engine/contracts.zig](../engine/contracts.zig) | `VmBackend.pause_resume` defaults false. `Store` is control-plane idempotency, not checkpoint payload storage. `FsKind.sqlitefs` is a filesystem adapter kind, not a checkpoint object store. |
-| AP2+ | [docs/sandbox-api-implementation.md](../docs/sandbox-api-implementation.md) | Auth, durable store, SQLite dependency, VM providers, SDKs, native Linux, and act qualification are not implemented. |
+| AP2+ | [docs/sandbox-api-implementation.md](../docs/sandbox-api-implementation.md) | Auth, durable store, VM providers, SDKs, native Linux, and act qualification are not implemented. |
 
 There is no VM execution, live pause, checkpoint capture, CheckpointStore,
 SQLite control store, TypeScript/Wasm SDK, native Linux ABI, or act-in-guest

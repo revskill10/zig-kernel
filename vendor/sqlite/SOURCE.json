@@ -1,0 +1,55 @@
+{
+  "name": "sqlite",
+  "version": "3.53.4",
+  "version_number": 3053004,
+  "source_id": "2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc",
+  "release": "sqlite-amalgamation-3530400",
+  "origin_urls": [
+    "https://www.sqlite.org/download.html",
+    "https://www.sqlite.org/changes.html",
+    "https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip"
+  ],
+  "archive": {
+    "filename": "sqlite-amalgamation-3530400.zip",
+    "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
+    "sha3_256": "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e"
+  },
+  "files": {
+    "sqlite3.c": {
+      "bytes": 9515341,
+      "sha256": "b1dd5d74ec7f29055a6684fa06fb3c2f6821c87dd38f9a458dfd2e8a1db28189",
+      "sha3_256": "67f423e9ebbbdc473cbc4772c872ee6b89f31fde4ed0279a5c25d5f65c043a16"
+    },
+    "sqlite3.h": {
+      "bytes": 690838,
+      "sha256": "919e7f2e8ed1d8f56ac17b412b8971c76aa5d1a879752cc6058f75e7d5910e1d",
+      "sha3_256": "89d0de498b1012938bb78dc18b68fea52e26f7f7b6db6347d126a2e58b86a05c"
+    }
+  },
+  "license": "public-domain",
+  "license_file": "LICENSE.md",
+  "license_notice": "The author disclaims copyright to this source code. In place of a legal notice, here is a blessing: May you do good and not evil. May you find forgiveness for yourself and forgive others. May you share freely, never taking more than you give.",
+  "zig_version": "0.16.0",
+  "targets": [
+    "native-host (Windows x86_64 host tests via test-store-dependency)",
+    "x86_64-linux-musl (store-dependency-probe)"
+  ],
+  "compile_defines": [
+    "SQLITE_THREADSAFE=1",
+    "SQLITE_OMIT_LOAD_EXTENSION=1",
+    "SQLITE_DQS=0",
+    "SQLITE_USE_URI=0",
+    "SQLITE_DEFAULT_MEMSTATUS=0",
+    "SQLITE_OMIT_DEPRECATED=1"
+  ],
+  "c_language": "c99",
+  "sanitize_c": "off",
+  "linked_os_libraries": {
+    "windows-x86_64": ["libc"],
+    "x86_64-linux-musl": ["libc"]
+  },
+  "threading": "serialized (SQLITE_THREADSAFE=1, SQLITE_OPEN_FULLMUTEX at open)",
+  "runtime_extension_loading": "disabled (SQLITE_OMIT_LOAD_EXTENSION)",
+  "optional_extensions": "none added (no SQL shell, FTS, JSON, RTree ENABLE flags)",
+  "notes": "Official amalgamation copied byte-for-byte. Header/source version mismatch is rejection. Not a system DLL, Python sqlite3, or in-memory substitute. Binding is engine/sqlite_c.zig; not wired into engine/contracts.Store."
+}

@@ -8,3 +8,7 @@ zig-out export-ignore
 *.log export-ignore
 test_asm*.zig export-ignore
 test_portasm.zig export-ignore
+
+# Official SQLite amalgamation: keep exact LF bytes on Windows checkouts.
+vendor/sqlite/sqlite3.c text eol=lf
+vendor/sqlite/sqlite3.h text eol=lf
