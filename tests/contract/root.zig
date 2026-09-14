@@ -301,9 +301,39 @@ test "bootstrap and engine consume the named sandbox_contract module identity" {
     try std.testing.expect(std.mem.eql(u8, engine.unavailable_seams.vm.meta.version, contract.CONTRACT_VERSION));
 }
 
+fn containsYamlLine(haystack: []const u8, line: []const u8) bool {
+    var i: usize = 0;
+    while (i + line.len <= haystack.len) : (i += 1) {
+        if (!std.mem.eql(u8, haystack[i .. i + line.len], line)) continue;
+        const start_ok = i == 0 or haystack[i - 1] == '\n';
+        const after = i + line.len;
+        const end_ok = after == haystack.len or haystack[after] == '\n' or haystack[after] == '\r';
+        if (start_ok and end_ok) return true;
+    }
+    return false;
+}
+
+fn rejectsIdentityHeaderSchemes(spec: []const u8) bool {
+    return std.mem.indexOf(u8, spec, "LocalOsIdentity") == null and
+        std.mem.indexOf(u8, spec, "X-Sandbox-Local-Identity") == null and
+        std.mem.indexOf(u8, spec, "type: apiKey") == null;
+}
+
+test "openapi yaml line match is lf/crlf robust and rejects identity schemes" {
+    try std.testing.expect(containsYamlLine("security:\n  - MutualTLS: []\n", "  - MutualTLS: []"));
+    try std.testing.expect(containsYamlLine("security:\r\n  - MutualTLS: []\r\n", "  - MutualTLS: []"));
+    try std.testing.expect(!containsYamlLine("security:\n  - LocalOsIdentity: []\n", "  - MutualTLS: []"));
+    try std.testing.expect(!containsYamlLine("  - MutualTLS: [] extra\n", "  - MutualTLS: []"));
+    try std.testing.expect(rejectsIdentityHeaderSchemes("security:\n  - MutualTLS: []\n"));
+    try std.testing.expect(!rejectsIdentityHeaderSchemes("security:\n  - LocalOsIdentity: []\n"));
+    try std.testing.expect(!rejectsIdentityHeaderSchemes("X-Sandbox-Local-Identity: yes\n"));
+    try std.testing.expect(!rejectsIdentityHeaderSchemes("type: apiKey\n"));
+}
+
 test "remote OpenAPI requires MutualTLS only and rejects identity header schemes" {
     const spec = openapi_spec.spec;
-    try std.testing.expect(std.mem.indexOf(u8, spec, "\n  - MutualTLS: []\n") != null);
+    try std.testing.expect(containsYamlLine(spec, "  - MutualTLS: []"));
+    try std.testing.expect(rejectsIdentityHeaderSchemes(spec));
     try std.testing.expect(std.mem.indexOf(u8, spec, "LocalOsIdentity") == null);
     try std.testing.expect(std.mem.indexOf(u8, spec, "X-Sandbox-Local-Identity") == null);
     try std.testing.expect(std.mem.indexOf(u8, spec, "type: apiKey") == null);

@@ -784,4 +784,71 @@ pub fn build(b: *std.Build) void {
     sandbox_test_step.dependOn(bootstrap_test_step);
     sandbox_test_step.dependOn(engine_test_step);
     sandbox_test_step.dependOn(contract_test_step);
+
+    // AP2a.0: pinned SQLite amalgamation. Opt-in only; not default install/API
+    // and not wired into engine/contracts.Store readiness.
+    const sqlite_c_flags = [_][]const u8{
+        "-std=c99",
+        "-DSQLITE_THREADSAFE=1",
+        "-DSQLITE_OMIT_LOAD_EXTENSION=1",
+        "-DSQLITE_DQS=0",
+        "-DSQLITE_USE_URI=0",
+        "-DSQLITE_DEFAULT_MEMSTATUS=0",
+        "-DSQLITE_OMIT_DEPRECATED=1",
+    };
+    const makeSqliteC = struct {
+        fn f(
+            b2: *std.Build,
+            target: std.Build.ResolvedTarget,
+            opt: std.builtin.OptimizeMode,
+            flags: []const []const u8,
+        ) *std.Build.Module {
+            const mod = b2.createModule(.{
+                .root_source_file = b2.path("engine/sqlite_c.zig"),
+                .target = target,
+                .optimize = opt,
+                .link_libc = true,
+                .sanitize_c = .off,
+            });
+            mod.addIncludePath(b2.path("vendor/sqlite"));
+            mod.addCSourceFile(.{
+                .file = b2.path("vendor/sqlite/sqlite3.c"),
+                .flags = flags,
+                .language = .c,
+            });
+            return mod;
+        }
+    }.f;
+
+    const host_sqlite_c = makeSqliteC(b, host_target, optimize, &sqlite_c_flags);
+    const dep_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/store/dependency_check.zig"),
+        .target = host_target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "sqlite_c", .module = host_sqlite_c },
+        },
+    });
+    const dep_tests = b.addTest(.{ .root_module = dep_test_mod });
+    const run_dep_tests = b.addRunArtifact(dep_tests);
+    const dep_test_step = b.step("test-store-dependency", "Run actual-file SQLite dependency gate");
+    dep_test_step.dependOn(&run_dep_tests.step);
+
+    const linux_sqlite_c = makeSqliteC(b, api_target, optimize, &sqlite_c_flags);
+    const probe_mod = b.createModule(.{
+        .root_source_file = b.path("tests/store/dependency_check.zig"),
+        .target = api_target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "sqlite_c", .module = linux_sqlite_c },
+        },
+    });
+    const probe_exe = b.addExecutable(.{
+        .name = "store-dependency-probe",
+        .root_module = probe_mod,
+    });
+    const probe_step = b.step("store-dependency-probe", "Build linux-musl SQLite seed/reopen probe");
+    probe_step.dependOn(&b.addInstallArtifact(probe_exe, .{}).step);
 }
