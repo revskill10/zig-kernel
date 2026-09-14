@@ -23,6 +23,9 @@
 !linker/**
 !tools/
 !tools/**
+!vendor
+!vendor/sqlite
+!vendor/sqlite/**
 !Dockerfile
 !.dockerignore
 scripts/qualify-alpine/

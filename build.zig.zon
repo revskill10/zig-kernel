@@ -19,6 +19,7 @@
         "docs",
         "engine",
         "schemas",
+        "vendor/sqlite",
         "Dockerfile",
         ".dockerignore",
     },

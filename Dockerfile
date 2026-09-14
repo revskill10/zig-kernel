@@ -23,6 +23,7 @@ COPY docs ./docs
 COPY boot ./boot
 COPY linker ./linker
 COPY tools ./tools
+COPY vendor/sqlite ./vendor/sqlite
 RUN zig build sandbox-api -Doptimize=ReleaseSafe --cache-dir /tmp/zig-cache --global-cache-dir /tmp/zig-global
 
 FROM --platform=linux/amd64 debian:bookworm-slim
