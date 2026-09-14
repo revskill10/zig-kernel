@@ -6,6 +6,19 @@
 `6c8c8ca0611005e7776f437f381c55a866a67e3c`. This is not a new runtime
 qualification.
 
+**Bun TS0 SDK status (2026-09-14):** `@zig-sandbox/sdk` under
+`packages/zig-sandbox-client/` is a private Bun 1.4.2 prerelease **draft**.
+Local mode owns a Zig userspace helper (`zig build sandbox-helper`) over
+private stdio pipes. Remote mode remains a pure client with no local fallback.
+`create` and `exec` stay typed unavailable (`features.execution: false`,
+readiness 503). Windows/Linux x64 are intended, not qualified, until the
+actual host matrix retains receipts. This is not production execution, not an
+npm registry package, not Alpine, and not a desktop. Node/Deno/macOS/ARM are
+unqualified. Planned later: signed platform helper packaging, provider/Store
+policy, Linux guest execution and act-in-guest same-conformance, optional
+in-process Node-API, portable Wasm core and guest Wasm as separate tracks.
+`bun:ffi` is not the production default.
+
 **Implementation status (this checkout):** AP0/AP1 diagnostic listener is
 published as recorded in
 [sandbox-api-implementation.md](../docs/sandbox-api-implementation.md):
@@ -14,7 +27,8 @@ seams (`engine/contracts.zig`), independent fixtures, JSON Schema/OpenAPI
 lane, and OpenAPI 3.1 with MutualTLS-only remote security. The fail-closed
 bootstrap is preserved (`features.execution: false`, `/readyz` 503, sandbox
 lifecycle 501, nested diagnostic error). WP2–WP14 remain pending. AP2–AP6
-are not started. A pinned SQLite 3.53.4 amalgamation and Zig wrapper exist
+production acceptance gates remain open; the TS0 draft AP5/WP10b subset does
+not complete them. A pinned SQLite 3.53.4 amalgamation and Zig wrapper exist
 (`vendor/sqlite/`, `engine/sqlite_c.zig`, `zig build test-store-dependency`);
 they are **not** `engine/contracts.Store`, not a control database, and not
 AP2. Native kernel/distro work is out of scope for SBX-API-001: this tree
@@ -113,7 +127,7 @@ the intended security properties.
 | Workspace | Policy and metadata; SQLite amalgamation wrapper only | No durable dirfd-safe workspace transfer; no SQLiteFS; no Store. |
 | Network | Builder requests `-nic none` | No runtime inspection of a child and no supported egress feature. |
 | Build/release | Hosted tests plus Linux-musl diagnostic `zig-sandbox`; `build.zig.zon` includes supervisor, Docker bootstrap, native, and `vendor/sqlite` | No production server/CLI artifacts, no current published image digest, no release promotion. |
-| TypeScript/Wasm SDKs | No project TypeScript package, portable Wasm core, selected guest runtime/profile, or SDK artifact | Required planned interfaces; README Roadmap says they are not in this checkout. |
+| TypeScript/Wasm SDKs | Private Bun TS0 source exists as a local-helper / remote-diagnostics package and remains unqualified. Portable Wasm core, guest Wasm runtime/profile, production SDK, and registry publication are pending. | Required planned interfaces; production SDK, both Wasm tracks, and registry publication remain pending. Private Bun TS0 does not complete them. |
 | Linux/KVM | Historical WSL supervisor suite and historical i386 KVM smoke | No hostile workload, concurrency, recovery, watchdog, or release candidate qualification. |
 | Checkpoints / act | Planned only: [sandbox-checkpoints.md](../docs/sandbox-checkpoints.md), [sandbox-local-ci.md](../docs/sandbox-local-ci.md) | No capture/store/restore; no act-in-guest. |
 
@@ -231,20 +245,22 @@ version metadata, and a common conformance suite is mandatory before selection.
 
 | Contract | Required operations and semantic guarantees | Initial adapter and allowed replacement |
 | --- | --- | --- |
-| API transport | Bounded request/response/stream bytes, cancellation, peer metadata, no implicit identity | UDS HTTP/1.1; optional mTLS HTTP transport. |
-| Auth/authz | Authenticate principal, return immutable subject/attributes, authorize action/resource | SO_PEERCRED mapper; mTLS mapper; no caller owner string. |
-| Policy/admission | Validate immutable request, reserve/release capacity atomically, explain denial | Policy model plus durable admission adapter. |
-| State/idempotency/events/audit | Transaction, fence, idempotency reservation/replay, ordered cursor, append audit | SQLite control-state store; a future store must preserve transaction/fence semantics. |
-| Lifecycle clock/watchdog | Monotonic deadline, boot identity, durable deadline, kill/reap result | Linux monotonic clock/pidfd watchdog; a replacement must fail closed on uncertain reboot time. |
-| Launcher | Create/revert typed lease, isolation proof, process lifecycle | **Linux baseline:** cgroup/ns/UID/seccomp/QEMU launcher. macOS/Windows providers supply AP4-equivalent supervised VM/isolation proof; no database substitute. |
-| VM backend | Boot immutable image with typed CPU/RAM/disk/network/pause capabilities | QEMU/KVM initially; SmolVM/libkrun is a candidate adapter, never an automatic subprocess-CLI replacement; each backend passes isolation/guest conformance gates. |
-| Pause/snapshot | Declare live pause, resume, snapshot/restore capabilities and resource ownership | Backend-specific adapter; unavailable capability returns `unsupported`, never an emulated transparent resume. Incremental **chunk storage** (content-addressed reuse of unchanged RAM/disk objects) is not dirty-page **execution** capture. See [sandbox-checkpoints.md](../docs/sandbox-checkpoints.md). |
-| Image registry | Resolve allowlisted immutable digest/provenance/ABI | Local signed-manifest registry; no tenant URL loader. |
-| Workspace filesystem | Hierarchical dirs/files/handles/ranges, atomic rename, permissions/types/links, durability/quota | Native guest disk, SQLiteFS, and explicitly authorized NativeHostExport adapters. |
-| Guest exposure | Transfer/mount workspace through bounded protocol or guest VFS adapter | Framed service/virtio disk; host export via virtiofsd or bounded FSRPC; never host-kernel mount of guest-controlled FS. |
-| Network | Deny/allow route with connection/DNS/proxy policy and audit | Deny adapter only initially; allowlisted egress later. |
-| Secret broker | Resolve authorized reference into one execution without logging bytes | Disabled adapter initially; explicit broker only after its own design/gates. |
-| Metrics/logging | Bounded structured observation/redaction/health | Local metrics adapter; no raw tenant bytes/IDs as labels. |
+| API transport / callback delivery | Bounded request/response/stream bytes, cancellation, peer metadata, no implicit identity. Callback delivery is a separately negotiated bidirectional protocol with distinct request namespaces. | Remote: UDS HTTP/1.1; optional mTLS HTTP. Local: SDK-owned private helper IPC plus a future callback bridge. Changing transport does not install remaining adapters. |
+| Auth/authz | Authenticate principal, return immutable subject/attributes, authorize action/resource | SO_PEERCRED mapper; mTLS mapper; local-owner OS identity derivation. No caller owner string. Callbacks cannot choose or replace the principal. |
+| Policy/admission | Validate immutable request, reserve/release capacity atomically, explain denial | Policy model plus durable admission adapter. Native or Bun policy may implement typed decisions; native enforcement and immutable owner limits still apply. Reserve/release and fencing are not advisory booleans. |
+| State/idempotency/events/audit | Transaction, fence, idempotency reservation/replay, ordered cursor, append audit | SQLite control-state store; a future store must preserve transaction/fence semantics. Bun SQLite bindings alone are not this contract. |
+| Lifecycle clock/watchdog | Monotonic deadline, boot identity, entropy, durable deadline, kill/reap result | Linux monotonic clock/pidfd watchdog; a replacement must fail closed on uncertain reboot time. A blocked JS event loop cannot stop independent deadlines, entropy validation, or force-reap. |
+| Launcher | Create/revert typed lease, isolation proof, process lifecycle | **Linux baseline:** cgroup/ns/UID/seccomp/QEMU launcher. macOS/Windows providers supply AP4-equivalent supervised VM/isolation proof; no database substitute. Privileged isolation remains native enforcement, not a callback return value. |
+| VM backend | Boot immutable image with typed CPU/RAM/disk/network/pause capabilities | QEMU/KVM initially; SmolVM/libkrun is a candidate adapter, never an automatic subprocess-CLI replacement; each backend passes isolation/guest conformance gates. Guest image/kernel is a boot artifact, not a JS callback. |
+| Pause/snapshot | Native provider owns live CPU/RAM/device pause, capture, and restore. CheckpointStore payload/object/chunk/manifest storage is an independent adapter identity. | Live pause/capture/restore stay backend-native; unavailable capability returns `unsupported`, never an emulated transparent resume. Incremental **chunk storage** (content-addressed reuse of unchanged RAM/disk objects) is not dirty-page **execution** capture. Qualified Bun/native CheckpointStore callbacks may store chunks/manifests only when they provide content identity, atomic publication, durability, GC-pin, and cancel semantics; storage qualification does not confer device capture or execution-state restore. See [sandbox-checkpoints.md](../docs/sandbox-checkpoints.md). |
+| Image registry | Resolve allowlisted immutable digest/provenance/ABI; cache/rootfs/blob/block/overlay semantics stay distinct | Local signed-manifest registry; no tenant URL loader. Local/native or qualified Bun-backed registry/storage may replace it after digest, provenance, quota, and credential isolation gates. |
+| Workspace filesystem | Hierarchical dirs/files/handles/ranges, atomic rename, permissions/types/links, durability/quota | Native guest disk, SQLiteFS, explicitly authorized NativeHostExport, and future qualified Bun host-folder or Bun SQLiteFS adapters implementing this same contract with declared features. |
+| Guest exposure | Transfer/mount workspace through bounded protocol or guest VFS adapter | Framed service/virtio disk; host export via virtiofsd, virtiofs, 9p, or bounded FSRPC per qualified provider. Never host-kernel mount of guest-controlled FS. A Bun callback completing is not proof the guest can mount or use the filesystem. |
+| Network | Deny/allow route with connection/DNS/proxy policy and audit | Deny adapter only initially; allowlisted egress later. Bun or native policy/proxy adapters remain under the owner's egress ceiling. |
+| Secret broker | Resolve authorized reference into one execution without logging bytes | Disabled adapter initially; explicit broker only after its own design/gates. Owner-supplied adapters and scoped references only; no guest-supplied storage credentials. |
+| Metrics/logging | Bounded structured observation/redaction/health | Local metrics adapter; no raw tenant bytes/IDs as labels. A slow observer cannot indefinitely block kill/reap. |
+| ToolRegistry / ToolExecutor | Discover and execute declared tools against a qualified guest profile | Guest tool adapters as in Section 9.6. Rejection never becomes ordinary host workload execution. |
+| Scheduler / retention / backup / crypto | Explicit future serialization, tenant ownership, durable pins, key lifecycle, and recovery | Not implied by a checkpoint or filesystem adapter; each needs its own contract and qualification. |
 
 The workspace contract has explicit cross-adapter meaning: directories,
 regular files, byte ranges, ordered listing, atomic same-filesystem rename,
@@ -276,11 +292,74 @@ files and jail setup are necessarily real host resources, not database adapters.
 Both workspace exposure adapters pass identical contract tests; missing a
 configured bridge dialect/capability fails closed.
 
+A future Bun SQLite filesystem adapter may use Bun's SQLite binding for those
+inode/dirent/chunk tables. It must declare its actual SQLite/runtime version
+and test transaction, durability, and concurrency limits. `bun:sqlite` alone
+is not a POSIX filesystem, not a host-folder fallback, not the control Store,
+and not a kernel, jail, or block device. It still must implement the same
+`WorkspaceFs/VFS` contract with declared features and still needs a qualified
+guest mount bridge (virtiofs, 9p, virtio-block, or bounded FSRPC per provider)
+before guest operations are advertised. If mmap, locks, symlinks, hardlinks,
+sparse extents, notifications, or cross-adapter rename cannot be implemented
+faithfully, advertise them `unsupported`. Direct database CRUD is not guest
+filesystem evidence.
+
+**Planned Bun-local subsystem adapters.** Every row above is selectable at
+startup/open from validated configuration through a future
+`LocalAdapterRegistry` (proposed name, not shipped). Native engine adapters
+and Bun-defined adapters implement the same relevant capability/conformance
+contract. Adapter registration is owned by the embedding application and bound
+to runtime/lease/generation/resource plus adapter/version; a new runtime,
+restart, rebind, or revoke starts a new epoch scoped to the affected
+resource or registry, and prior-epoch IDs are rejected rather than
+promoted. Credentials and host paths stay in owner-controlled
+local configuration; callback requests carry authorized handles, not
+guest-provided owner, path, or SQL authority. This table is an architectural
+map, not a reason to expose every privileged internal to untrusted remote
+tenants, and not a claim that TS0 implements any of it.
+
+Not every subsystem is a JavaScript callback. Classify local bindings as
+follows:
+
+| Subsystem | Local binding class | Callback-capable? |
+| --- | --- | --- |
+| Engine transport / callback delivery | SDK-owned private helper IPC plus a separately negotiated callback protocol | Delivery mechanism only; swapping transport does not swap other subsystems |
+| Authentication / authorization | Trusted OS/local-owner identity plus explicit policy | No: callbacks cannot select the principal |
+| Policy / admission / capacity | Native or Bun typed decisions under an immutable owner ceiling | Decision injection only; cannot widen limits |
+| Control Store / idempotency / audit / events | Native or qualified Bun-backed durable store | Only if the durable contract is preserved; `bun:sqlite` alone is insufficient |
+| Clock / entropy / watchdog | Injectable sources with monotonic/boot-id/entropy guarantees | No: a blocked JS loop cannot disable independent deadlines |
+| Launcher / process supervisor | Qualified native host adapter | No: isolation/rollback/process ownership stay native |
+| VM backend / guest control | Selected qualified provider | No: guest image is a boot artifact, not a JS library |
+| Live pause / capture / restore / checkpoint store | Native provider owns live CPU/RAM/device pause/capture/restore. CheckpointStore payload/object/chunk/manifest storage is an independent native or qualified Bun callback store. | Device capture/restore: No — callbacks do not preserve CPU/RAM/device or execution state. CheckpointStore: qualified Bun/native chunk/manifest storage callbacks are permitted with content identity, atomic publication, durability, GC-pin, and cancel semantics; storage qualification does not confer capture/restore |
+| Image registry / cache / rootfs / blob/block/overlay | Local/native or qualified Bun-backed storage | Storage injection only; resolve approved sources only |
+| Workspace filesystem / approved host-folder export | Native guest disk, authorized host-folder, Bun FS callback, or SQLiteFS | Yes, behind the shared FS contract and declared features |
+| Guest filesystem exposure / mount bridge | Qualified virtiofs/9p/virtio-block/FSRPC per provider | No: callback completion is not a mount |
+| Network / DNS / HTTP proxy | Bun/native policy or proxy under outer egress ceilings | Yes, for allow/deny under the ceiling; cannot widen egress or hide host-exec |
+| Secrets / credential provider | Explicit owner-supplied adapter and scoped references | Handle resolution only; no implicit environment discovery |
+| Metrics / logs / tracing | Replaceable bounded sink with backpressure/drop and redaction | Observer only; cannot block kill/reap |
+| ToolRegistry / ToolExecutor | Replaceable discovery/execution contracts | Selected tool/profile only; never host-exec fallback |
+| Scheduler / retention / backup / crypto | Explicit future adapters | Not implied by filesystem or checkpoint implementations |
+
+These sixteen rows remain independently swappable contracts. A qualified
+CheckpointStore does not become live pause, capture, or device restore, and
+the Callback-capable column does not pretend every subsystem is a JavaScript
+callback.
+
 Kernel CPU, MM, scheduler, VFS, device, and ABI implementations may use
 compile-time interfaces selected per build and validated by a guest-image test
-matrix. They are not hot-swappable privileged internals: changing any trusted
-implementation requires a new image digest and full guest/isolation
-qualification.
+matrix. They are not hot-swappable privileged internals and are not runtime
+JavaScript replacement: changing any trusted implementation requires a new
+image digest and full guest/isolation qualification.
+
+A native host-folder adapter exposes only approved roots and declared
+RO/RW/mask policy. Workspace, symlink, path-authority, transaction, error,
+fence, and durability rules are the existing filesystem contract. Network and
+policy callbacks may propose or restrict decisions under that ceiling; they
+cannot override helper/launcher isolation, escape path grants, expand egress,
+acquire credentials, or downgrade authentication. Arbitrary application
+callbacks run with the embedding application's own trust; an in-process Bun
+closure is not sandboxed from its host merely because requests use capability
+handles. Untrusted plugin code needs a separately qualified isolation profile.
 
 ### 5.2 Guest choice
 
@@ -675,12 +754,28 @@ are distinct and never revise server execution deadline.
 
 ### 8.1 Required TypeScript SDK
 
-**Proposed package:** `@zig-sandbox/sdk` under
+**TS0 (2026-09-14):** `@zig-sandbox/sdk` exists as a private Bun 1.4.2 package
+under `packages/zig-sandbox-client/` with ESM/declaration exports `.`,
+`/local`, and `/remote`. Local mode launches an SDK-owned Zig helper through
+an explicit trusted `helperPath`; remote mode never does. Execution remains
+typed unavailable. Landed source is not a completed TS0 qualification until
+helper build, lifecycle, and packed-consumer receipts exist for the intended
+Windows/Linux x64 matrix.
+Helper/1 remains a bounded one-inflight diagnostic
+protocol; aborting that diagnostic call may tear down the helper/1
+channel. That teardown is a TS0 diagnostic fact, not the future
+executing-VM wait-abort contract, and later provider execution must not
+inherit it for ordinary waiter abort. Callbacks, adapter registration,
+SQLiteFS, and guest I/O are absent and unadvertised. The remainder of this subsection is the production
+SDK plan (generated OpenAPI types, Node/browser qualification, local adapter
+registry, registry publish) and is not claimed by TS0.
+
+**Proposed production package:** `@zig-sandbox/sdk` under
 `packages/zig-sandbox-client/`, owned with `package.json`,
 `src/client.ts`, `src/types.ts`, `src/errors.ts`, `src/transports/*`,
 `src/generated/*`, `tests/*`, and API-version compatibility
-fixtures. It is planned only: no package is installed, built, or published by
-this audit.
+fixtures. TS0 source contains a bounded subset of that tree; it is not a registry
+release.
 
 The package exports a typed `SandboxClient`, resource/operation IDs, lifecycle
 and capability types, stable error classes, and a version constant compatible
@@ -703,11 +798,11 @@ TypeScript, and Wasm behavior.
 
 | SDK surface | Required behavior |
 | --- | --- |
-| Transport/auth | Node selects HTTPS or configured UDS transport; browser selects same-origin HTTPS/proxy only. Browser code never embeds mTLS private keys, UDS access, internal broker/FD/launcher handles, or server credentials. A server-authorized opaque export resource ID travels only through the normal mount API. |
+| Transport/auth | **Remote entrypoint:** Node selects HTTPS or configured UDS transport; browser selects same-origin HTTPS/proxy only. Browser code never embeds mTLS private keys, UDS access, internal broker/FD/launcher handles, or server credentials. A server-authorized opaque export resource ID travels only through the normal mount API. Remote mode never launches a helper, VM, or host process, and never inherits local path or callback authority. **Local entrypoint (`/local`):** Bun-only TS0 may spawn the pinned userspace helper at an explicit `helperPath` and later a selected VM provider; that is not a remote fallback. Transport injection is not subsystem adapter registration. |
 | Resources | Typed create/list/inspect, async operation wait, start/stop/pause/resume, optional snapshot capability, executions/PTY/files/exports/mounts, events, reset/destroy. Methods check advertised capability before use. |
 | Correctness | Mutations create/save idempotency keys; calls carry generation and operation fences; 202 returns typed operation/location; stale/unsupported/retryable errors retain server request ID. |
 | Streams/bytes | Upload/download accept `Uint8Array`/web streams; output/events expose `AsyncIterable` byte chunks with cursor resume; abort uses `AbortSignal` and distinguishes client disconnect from remote cancel. |
-| Retry/security | Retry only safe/idempotent pre-response or explicitly retryable results; no automatic replay of non-idempotent streams; bounded bodies/timeouts; redact credentials and never invoke local shell/QEMU. |
+| Retry/security | Retry only safe/idempotent pre-response or explicitly retryable results; no automatic replay of non-idempotent streams; bounded bodies/timeouts; redact credentials. Remote never invokes local shell/QEMU. Local TS0 may spawn only the owned helper binary; it must not shell-expand or PATH-search untrusted executables. |
 
 Node mTLS credentials are supplied by a caller-controlled secure credential
 provider; browser callers rely on same-origin session/proxy authentication and
@@ -715,11 +810,105 @@ documented CORS policy. A browser never connects directly to a privileged UDS
 or uses a server identity. Remote browser access requires an explicit BFF/proxy
 authorization boundary rather than permissive CORS.
 
+**Planned local adapter binding.** A Bun application that explicitly imports
+`/local` supplies typed filesystem, network, and policy adapters through a
+versioned `LocalAdapterRegistry` at open (proposed name, not shipped). The
+SDK owns that local runtime's native helper, private bidirectional IPC, and
+callback dispatcher. Bun functions remain in the trusted embedding process or
+an SDK-owned, explicitly qualified Worker; the helper receives only bounded
+messages and opaque adapter/resource handles. JavaScript callbacks execute on
+the Bun event loop or that Worker, never on an arbitrary native OS thread.
+No function, source, `eval`, or import string crosses the private IPC. Local
+mode does not require a user-managed API server or callback-broker service;
+automatic SDK-owned components may exist, but the library owns their lifetime
+and authority. Remote mode keeps the separately provisioned authenticated
+callback broker described in
+[sandbox-api.md §2.1](sandbox-api.md#21-typescript-facade-remote-callback-broker-and-local-callback-bridge).
+The two modes share observable contracts, not ambient authority.
+
+Registry selection occurs at startup/open from validated configuration. Bind
+handles to runtime identity, sandbox/generation, adapter version, and declared
+rights. A new runtime, rebind, restart, or revoke creates a new epoch scoped
+to the affected resource or registry; prior-epoch IDs and replies are
+rejected and never promoted onto the new runtime or resource. Do not promise
+hot-swapping privileged internals mid-run.
+Bidirectional callbacks require a versioned protocol extension beyond the TS0
+diagnostic allowlist: separate engine-request and callback-request correlation
+namespaces, bounded byte/queue/concurrency budgets, deadlines, cancellation,
+backpressure, and defined reentrancy (or rejection of callback-to-same-
+operation recursion). The pump must service callbacks while an engine
+operation is awaiting a callback; a simple serialized RPC loop can deadlock.
+No callback may run under a helper lock that prevents cancel, close, or
+receiving the callback response. Cancellation and revocation have four
+distinct scopes:
+
+1. **Wait/stream `AbortSignal`:** detaches and settles only that waiter or
+   stream. It is not durable execution cancel and does not revoke the adapter
+   registry, cancel a continuing guest, or disable unrelated registered
+   FS/network adapters.
+2. **Callback-request cancel/deadline:** revokes only that invocation and
+   rejects its late response. Any dependent guest I/O failure follows that
+   adapter's fence/unknown-side-effect contract; it does not revoke other
+   registrations.
+3. **Explicit durable operation cancel:** a separate generation-fenced,
+   idempotent engine operation. It is not implied by waiter abort or by a
+   single callback-request cancel.
+4. **Resource/lease/registration revoke versus whole-runtime/registry
+   teardown:** explicit revoke of one resource, lease, or registration
+   revokes only that scope, its handles, and dependent I/O and epoch;
+   unrelated adapters and leases remain usable. Runtime close,
+   owner/helper/Bun death, or explicit whole-registry revoke tears down that
+   runtime's registry and owned resources, rejects dependent guest I/O,
+   settles promises, releases handles once, and reports uncertain durable
+   writes.
+
+No retry into ordinary host exec or an unrelated adapter. Parent death is
+independent of ordinary JS finalization. A JS callback that blocks the Bun
+loop cannot disable helper/provider-enforced operation deadlines. TS0
+helper/1 may tear down its one-inflight diagnostic channel on abort; that
+diagnostic teardown is not the executing-VM wait-abort contract.
+
+**Local callback IPC byte ownership.** Request and reply payloads are either
+copied bounded byte snapshots or owned versioned byte handles. Copy
+validated, bounded inputs before asynchronous use; do not retain borrowed
+Bun typed-array views, `ArrayBuffer` slices, or native buffers after the
+agreed call boundary. Copy or transfer reply bytes into caller-owned memory
+before the producer or bridge releases its source ownership. Internal
+borrowed, scratch, and invocation buffers are released on completion,
+cancel, or revoke. Successfully delivered copied or transferred byte results
+remain caller-owned and valid until caller disposal or GC, including after
+that invocation's completion, cancel, or later runtime/resource revoke.
+Later runtime or resource revocation invalidates handles and authority, not
+already delivered byte copies. A late canceled callback cannot publish a new
+result. Callbacks receive immutable snapshots or sole-owned transferred
+handles. If a qualified Bun `Worker` transfer is selected, transfer detaches
+sole ownership and the sender must not access the buffer after transfer. The
+initial callback profile rejects `SharedArrayBuffer`, raw native-pointer
+zero-copy, and any shared-memory shortcut. Cancel, completion, or revoke
+releases that invocation's internal payload ownership without promoting
+borrowed views and without invalidating already delivered caller-owned
+copies. These rules stay consistent with bounded
+byte/queue/backpressure budgets and with the prohibition on invoking
+JavaScript from arbitrary native helper threads.
+
+In-process Node-API variants are a separate future and require supported
+thread-safe/async dispatch plus independent Bun qualification. Portable Wasm
+core and guest Wasm remain separate tracks. Node/Deno/macOS/ARM stay
+unqualified. Activate local adapters only after version negotiation, bridge
+protocol, and provider/adapter qualification pass. Until then, the
+diagnostics package refuses callback and real-execution requests as
+unsupported/unavailable. Required future fixtures live in Section 11.2.
+
 Package CI runs typecheck/lint/unit tests, Node UDS/HTTPS fixtures, browser
 fetch/proxy fixtures, generated-contract compatibility, stream/AbortSignal
 tests, error/idempotency/generation negative cases, and package tarball
-smoke. Release publishes an identified tarball only after its API version,
-SBOM/provenance, and integration suite match the promoted server artifact.
+smoke. Future Bun-local CI adds library-only helper ownership, host-folder
+then SQLiteFS guest-filesystem conformance, and callback
+failure/revoke/queue/cleanup, abort-scope, epoch-rejection, and byte-ownership
+tests, independently of Node/Deno/browser
+qualification. Release publishes an identified tarball only after its API
+version, SBOM/provenance, and integration suite match the promoted server
+artifact. No cross-platform claim based only on interfaces.
 
 ### 8.2 Required WebAssembly interfaces
 
@@ -734,10 +923,12 @@ the Linux launcher, VM, cgroup, broker, or server authentication boundary:
    command executes, never a reason to run it in the API process or on the
    client host.
 
-No project source package, selected runtime, guest profile, or published SDK
-exists today. The TypeScript client, portable core, and in-VM guest workload
-profile are all required delivery tracks before production promotion; they are
-not optional substitutes for one another.
+No portable Wasm package, guest Wasm runtime/profile, or published production
+SDK exists today. Unqualified private Bun TS0 source exists as a local-helper
+and remote-diagnostics package; it does not complete those tracks. The
+TypeScript production client, portable core, and in-VM guest workload profile
+are all required delivery tracks before production promotion; they are not
+optional substitutes for one another.
 The initial portable core imports no functions and returns typed effects for
 its authorized embedder to perform; it never imports a Linux launcher, host
 filesystem, network, KVM, credentials, or a process executor. That boundary
@@ -886,7 +1077,12 @@ The shared FS adapter contract defines namespace handles, open/read/write/seek/
 stat/readdir/create/unlink/rename/flush/locks, capability negotiation, inode
 identity, errors, durability acknowledgment, and declared symlink/hard-link/
 cross-mount semantics. Tests cover RO denial, symlink escape, hard-link/race,
-sibling hiding, source replacement/revocation, and reset/destroy races.
+sibling hiding, source replacement/revocation, and reset/destroy races. Future
+Bun host-folder and Bun SQLiteFS adapters implement this same contract with
+declared features; missing operations return typed `unsupported`. Guest use
+still requires the qualified mount bridge above. Callback completion is not
+mount proof, and `bun:sqlite` is not a POSIX filesystem or host-folder
+fallback.
 
 Live export data survives sandbox reset, destroy, and expiry: revoke/fence the
 mount capability before VM teardown, but never delete the host folder. Copy-in
@@ -1001,11 +1197,11 @@ execute tool processes.
 | WP5 Linux launcher | WP1-WP3 | `linux/*`, runtime, jail | Applied cgroup/ns/UID/FD/seccomp/QEMU and rollback | Child inspection proves every control; injected failures clean up | F02,F03,F05,F13,F17 |
 | WP5b Cross-platform providers | WP1-WP4,WP5 | `providers/{macos,windows}/*`, provider contract/tests | Hypervisor.framework and selected Hyper-V/WHPX local-provider implementations | AP4 provider capability, tenant lifecycle, pause/recovery, and no-host-fallback suites pass | F01,F03,F07 |
 | WP6 Lifecycle/recovery | WP3,WP5 | engine/process/recovery tests | Fenced cancel/reset/destroy/TTL/restart/pause-resume | ESRCH/reap, paused cancel/reset/expiry, snapshot capability, crash/duplicate/orphan matrix passes | F11-F13,F15 |
-| WP7 Workspace/images/exports | WP1,WP3,WP5 | workspace/image/export contracts, native/SQLiteFS/HostExport adapters | Guest disk/COW root, transfer, mount catalog, quota, registry | Adapter and export revoke/RO/RW/race conformance; no host escape | F06,F16 |
+| WP7 Workspace/images/exports | WP1,WP3,WP5 | workspace/image/export contracts, native/SQLiteFS/HostExport adapters | Guest disk/COW root, transfer, mount catalog, quota, registry | Adapter and export revoke/RO/RW/race conformance; no host escape. Same guest FS vectors later apply to qualified Bun host-folder and Bun SQLiteFS adapters (WP10b); callback completion is not mount proof | F06,F16 |
 | WP8 Guest profiles/VM | WP1,WP5,WP7 | Linux profile/VM backend plus x86_64/proc/agent source | Linux developer profile implementation and native experimental parity path | Guest unit/boot/ABI backend tests pass; native promotion additionally closes F04/F08/F18-F21 | F04,F05,F08,F18-F21 |
 | WP9 End-to-end/tools | WP4-WP8 | guest link/engine/runtime/tool registry/tests | Framed exec/files/mounts/output, pause acknowledgement, and guest ToolExecutor | Frame/silence/flood/reset/export/pause/tool negative cases bounded | F03,F07,F08 |
 | WP10 CLI | WP1,WP4,WP9 | CLI/client/docs | Remote client and `--local` worker mode | UDS/TLS/JSON/signals/retry/TTY/platform negative tests | F01,F07 |
-| WP10b TypeScript SDK | WP1,WP4,WP9 | `packages/zig-sandbox-client/*`, OpenAPI fixtures, package CI | Typed Node/browser SDK and versioned package contract | Transport/auth/stream/AbortSignal/idempotency/generation/package-tarball tests pass; no host fallback | F01,F07,F09,F10 |
+| WP10b TypeScript SDK | WP1,WP4,WP9 | `packages/zig-sandbox-client/*`, OpenAPI fixtures, package CI | Typed Node/browser remote SDK, Bun `/local` library, and versioned package contract | Remote transport/auth/stream/AbortSignal/idempotency/generation/package-tarball tests pass; no host fallback. **Future Bun-local (not TS0):** a Bun app imports `/local`, registers a real host-folder FS adapter then a SQLiteFS adapter, runs the same guest FS conformance without a user-managed API or broker service, and passes callback failure/revoke/queue/cleanup, abort-scope, epoch-rejection, byte-ownership, plus identity-separation tests; no host-exec fallback; remote parity of observable contracts | F01,F07,F09,F10 |
 | WP10c WebAssembly interfaces | WP1,WP4,WP8,WP9,WP10b | `packages/zig-sandbox-core-wasm/*`, `guest/wasm/*`, runtime image/profile fixtures | Portable Wasm SDK core plus in-VM guest-Wasm runtime/ABI profile | Portable ABI/import/Worker corpus and exact guest runtime/WASI/hostile-module corpus pass; no host-exec or ABI fallback | F01,F04,F07,F08 |
 | WP10a Network/ingress profile | WP4-WP9 | network adapter/proxy/DNS/ingress/observability policy, image capabilities, tests | Offline default, qualified allowlist package network, declared loopback port publishing | DNS/proxy/SSRF/package-install/ingress revoke/metrics-log corpus passes before WP12 can use egress | F07 |
 | WP11 Ops/qualification harness | WP2-WP10c | service docs, CI, release harness | install/metrics/backup/upgrade rehearsal and non-promoting artifact harness | Upgrade/rollback rehearsal and hash-linked evidence collection; no promotion occurs here | F06,F23 |
@@ -1046,8 +1242,8 @@ is E1b snapshot only.
 The [README Sandbox API (diagnostics)](../README.md#sandbox-api-diagnostics)
 section documents this diagnostic surface and its Node capability example; it
 does not claim that the bootstrap executes sandboxes. [README Roadmap](../README.md#roadmap)
-states that TypeScript/Wasm SDK packages are not in this checkout; planned
-package names remain Sections 8.1-8.2.
+describes private Bun TS0 draft diagnostics; the full production SDK and both
+Wasm tracks remain planned. Planned package names remain Sections 8.1-8.2.
 
 **Proposed production container contract:** pin base-image/build-input digests;
 use multi-stage build; create non-root service UID/GID; use read-only root;
@@ -1086,7 +1282,29 @@ ordering/pagination, byte-range reads/writes, atomic same-adapter rename,
 cross-adapter copy semantics, fsync/durability acknowledgement, permissions,
 regular-file-only policy, symlink/hardlink policy, quota reservation, and
 staging cleanup. The same test vectors run against the common native guest VFS
-and SQLiteFS guest VFS behavior, not merely host staging.
+and SQLiteFS guest VFS behavior, not merely host staging. A future qualified
+Bun host-folder adapter and Bun SQLiteFS adapter must pass those same guest
+vectors through a qualified mount bridge (virtiofs, 9p, virtio-block, or
+bounded FSRPC per provider). Callback completion is not mount proof.
+
+**Required future Bun-local fixtures (not TS0, not current G10).** These close
+WP10b/AP5 local acceptance after version negotiation, bridge protocol, and
+provider/adapter qualification. They do not change today's diagnostic
+capabilities.
+
+| Fixture | Evidence required |
+| --- | --- |
+| Bun library-only integration | Fresh application imports `/local`, supplies adapters, opens and owns helper/dispatcher/provider, runs operations, closes; no user-managed API or broker process/socket is required |
+| Common filesystem suite on actual guest calls | Same vectors through native guest disk, explicitly approved host folder, Bun filesystem callback, and Bun SQLiteFS: dirs/list/pagination/ranges/atomic rename/durability/quota/permissions/link semantics; unsupported features are truthful |
+| SQLiteFS persistence distinction | Guest creates/renames/reads bytes through the callback bridge, closes/reopens the adapter, verifies persistence and crash outcome; control Store and isolation are independently qualified |
+| Native folder authority | RO/RW/masks, symlink swap/path traversal/outside-root handles, revoke and generation races; no exposure beyond approved roots |
+| Network/policy injection | Equivalent allow/deny decisions on named profiles; callback cannot widen egress, credential, or resource ceilings; deny adapter remains swappable |
+| Callback protocol/lifecycle | Interleaved engine reply and callback, bounded queue/flood, byte-stream backpressure, slow/throwing/reentrant callback, timeout; wait/stream abort of an unrelated waiter leaves registered FS/network adapters and the running operation usable; per-callback cancel versus whole-runtime close/death/whole-registry revoke; explicit revoke of one FS export leaves an unrelated network adapter/export in the same runtime usable; late/duplicate response after cancel; helper/Bun death; no deadlock or orphan success |
+| Callback byte ownership | Caller mutates its submit buffer after enqueue without changing the in-flight snapshot; a received copied/transferred byte result remains unchanged after completion, later runtime close/revoke, and producer reuse or mutation of its source buffer; late callback/return cannot observe or write borrowed caller/native buffers after completion/cancel, and a late canceled callback cannot publish a new result; qualified Worker transfer/detach leaves the sender without access and cleans up; no SharedArrayBuffer/shared-memory shortcut; ownership remains consistent with byte/backpressure/native-thread limits |
+| Identity separation | Cross-runtime/cross-sandbox/stale-generation/prior-epoch callbacks rejected; a new runtime/rebind/restart/revoke never promotes old handles; remote transport never launches a local helper or inherits a local callback/path/credential grant |
+| Durable side effect | Crash before/after SQLiteFS or other adapter commit returns success only when its contract permits; retries respect operation IDs/fences and reconcile uncertain commit |
+| Tarball and platform | Actual Bun package consumer and helper artifacts on each claimed host, independent from Node/Deno/browser qualification; no cross-platform claim based only on interfaces |
+| TS0 negative boundary | Diagnostics package refuses callback/real-execution requests as unsupported/unavailable until the complete configured bridge/provider gate passes |
 
 Upgrade: stop admission; drain/fence work; cancel/finish by policy; snapshot
 and verify database; migrate under singleton lock; start new binary; reconcile;

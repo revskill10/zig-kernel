@@ -785,6 +785,36 @@ pub fn build(b: *std.Build) void {
     sandbox_test_step.dependOn(engine_test_step);
     sandbox_test_step.dependOn(contract_test_step);
 
+    // Opt-in TS0 local SDK helper. Host userspace stdio process; not the Linux
+    // TCP bootstrap, not default install, and not a VM/kernel payload.
+    const helper_logic_mod = b.createModule(.{
+        .root_source_file = b.path("supervisor/sdk_helper.zig"),
+        .target = host_target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sandbox_contract", .module = contract_mod },
+            .{ .name = "sandbox_bootstrap", .module = bootstrap_mod },
+        },
+    });
+    const helper_main_mod = b.createModule(.{
+        .root_source_file = b.path("supervisor/sdk_helper_main.zig"),
+        .target = host_target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sdk_helper", .module = helper_logic_mod },
+        },
+    });
+    const helper_exe = b.addExecutable(.{
+        .name = "zig-sandbox-helper",
+        .root_module = helper_main_mod,
+    });
+    const helper_step = b.step("sandbox-helper", "Build portable TS0 local SDK stdio helper (opt-in)");
+    helper_step.dependOn(&b.addInstallArtifact(helper_exe, .{}).step);
+
+    const helper_tests = b.addTest(.{ .root_module = helper_logic_mod });
+    const helper_test_step = b.step("test-sdk-helper", "Run TS0 local SDK helper protocol tests (opt-in)");
+    helper_test_step.dependOn(&b.addRunArtifact(helper_tests).step);
+
     // AP2a.0: pinned SQLite amalgamation. Opt-in only; not default install/API
     // and not wired into engine/contracts.Store readiness.
     const sqlite_c_flags = [_][]const u8{

@@ -14,7 +14,8 @@ Linux ABI or hardware qualification. The API is diagnostics only.
 | i386 QEMU | `qemu-bin` ELF32 demo | Linux userspace |
 | Native x86_64 UEFI | PE32+ loader, ELF64 payload, FAT16 ESP, smoke initramfs | CPL3 userspace, Linux ABI, Alpine rootfs, desktop, production isolation |
 | Supervisor | Hosted tests: policy, session, workspace, API, QEMU args, portable contract | Process lifecycle, Unix-socket server, guest qualification |
-| Sandbox API (`zig-sandbox`) | Linux/amd64: `/healthz` 200, `/readyz` 503, capabilities `execution:false`, `/v1/sandboxes*` 501 | Client CLI; TypeScript SDK; Wasm SDK and guest Wasm; pluggable providers; host mounts; pause/resume |
+| Sandbox API (`zig-sandbox`) | Linux/amd64: `/healthz` 200, `/readyz` 503, capabilities `execution:false`, `/v1/sandboxes*` 501 | Client CLI; production execution; Wasm SDK and guest Wasm; pluggable providers; host mounts; pause/resume |
+| TypeScript SDK (`@zig-sandbox/sdk`) | TS0 Bun 1.4.2 local helper + remote diagnostics source; `create`/`exec` typed unavailable. Windows/Linux x64 intended, unverified until the host matrix retains receipts | npm registry publish; Node/Deno; signed helper packages; Linux guest execution; Wasm SDK |
 | Docker API image | Loopback `-p 127.0.0.1:HOST:8080`, unprivileged `sandbox` user, no KVM | Privileged or KVM execution |
 
 ## Quick start (Zig 0.16.0)
@@ -106,8 +107,47 @@ curl -i -X POST --data '{"image":"example"}' \
 | `GET`/`HEAD /v1/capabilities` | 200 | `features.execution` is `false` |
 | `/v1/sandboxes` and descendants | 501 | Nested `{"error":{"code","message"}}` |
 
-Do not retry 501 or fall back to a host process. A healthy container healthcheck
-is liveness only; it is not execution readiness.
+Do not retry 501 or fall back to a host process.
+
+## Local TypeScript SDK (TS0, Bun 1.4.2)
+
+Private source/tarball library, not an npm registry install. It owns a Zig
+userspace helper over stdio pipes; the native kernel remains a VM boot artifact.
+Execution is still unavailable. Windows/Linux x64 are the intended hosts;
+do not treat this draft source as qualified until the actual matrix passes.
+
+```sh
+zig build sandbox-helper
+cd packages/zig-sandbox-client
+bun install --frozen-lockfile
+bun run build
+```
+
+```ts
+import { LocalSandbox } from "@zig-sandbox/sdk/local";
+import { SandboxUnavailableError } from "@zig-sandbox/sdk";
+
+const helperPath = "/abs/path/zig-out/bin/zig-sandbox-helper"; // .exe on Windows
+const runtime = await LocalSandbox.open({ helperPath });
+try {
+  console.log((await runtime.capabilities()).features.execution); // false
+  await runtime.create({
+    profile: "linux-vm/x64",
+    image: { id: "example", digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },
+  });
+} catch (err) {
+  if (!(err instanceof SandboxUnavailableError)) throw err;
+} finally {
+  await runtime.close();
+}
+```
+
+`helperPath` must be a trusted absolute path to the helper built above. Details:
+[packages/zig-sandbox-client/README.md](packages/zig-sandbox-client/README.md).
+Startup/request deadlines begin at the private-pipe operation after `Bun.spawn`
+returns; they do not preempt a synchronous native spawn. This draft remains
+unqualified until the root Windows/Linux matrix passes. A healthy container
+healthcheck is liveness only; it is not execution readiness.
 
 The fetch example is server-side JavaScript (Node with `fetch`); browser
 integrations need a same-origin proxy because diagnostic bootstrap provides
@@ -136,9 +176,10 @@ evidence every listed route executes.
 
 ## Roadmap
 
-Not in this checkout: client CLI, execution providers, TypeScript and
-embedded Wasm SDKs, pause/resume, durable checkpoints, guest-local CI, or
-Linux/Alpine/Vinix/desktop/Photon products.
+Not in this checkout: client CLI, execution providers, published TypeScript
+registry packages, embedded Wasm SDKs, pause/resume, durable checkpoints,
+guest-local CI, or Linux/Alpine/Vinix/desktop/Photon products. The pending
+Wasm SDK and guest workloads remain separate tracks.
 
 Plans only (not runnable):
 [checkpoints](docs/sandbox-checkpoints.md),

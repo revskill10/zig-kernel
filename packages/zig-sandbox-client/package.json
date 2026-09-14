@@ -1,0 +1,40 @@
+{
+  "name": "@zig-sandbox/sdk",
+  "version": "0.1.0-ts0",
+  "private": true,
+  "description": "TS0 Bun-first local/remote TypeScript sandbox SDK. Execution is typed unavailable; not a production sandbox.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "bun": "1.4.2"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./local": {
+      "types": "./dist/local.d.ts",
+      "import": "./dist/local.js"
+    },
+    "./remote": {
+      "types": "./dist/remote.d.ts",
+      "import": "./dist/remote.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "bun ./node_modules/typescript/bin/tsc -p tsconfig.json --pretty false",
+    "typecheck": "bun ./node_modules/typescript/bin/tsc -p tsconfig.json --pretty false --noEmit false",
+    "test": "bun test tests"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "typescript": "7.0.2"
+  }
+}
