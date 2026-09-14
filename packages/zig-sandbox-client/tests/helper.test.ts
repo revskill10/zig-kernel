@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, realpath, rm } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { LocalSandbox } from "../src/local.ts";
-import { encodeFrame, OwnedHelperTransport, parseHelperResponse, processAlive } from "../src/transports/helper.ts";
+import { encodeFrame, FrameDecoder, OwnedHelperTransport, parseHelperResponse, processAlive } from "../src/transports/helper.ts";
 import {
   HelperBusyError,
   HelperClosedError,
@@ -218,19 +218,57 @@ describe("adversarial fake helper streams", () => {
     expect(() => new OwnedHelperTransport({ ...base, startupTimeoutMs: 0 })).toThrow(HelperStartupError);
   });
 
-  test("partial frame then EOF fails closed with eof and reaps", async () => {
+  test("child exit after truncated response fails closed with eof or helper_exit and reaps", async () => {
     const script = await writeFake(
       "partial.ts",
       `${FAKE_IO}
-const { closeSync } = await import("node:fs");
 await stdinDecoder.readFrame();
 const header = Buffer.alloc(4); header.writeUInt32BE(20, 0); await Bun.write(Bun.stdout, header); await Bun.write(Bun.stdout, Buffer.from("abc"));
-closeSync(1);
-await new Promise((r) => setTimeout(r, 20000));
+process.exit(0);
 `,
     );
     const transport = transportFor(script);
-    await expectTypedFailure(() => transport.open(), transport, HelperProtocolError, "eof");
+    const err = await expectTypedFailure(() => transport.open(), transport, HelperProtocolError);
+    expect(err).toBeInstanceOf(HelperProtocolError);
+    const code = (err as HelperProtocolError).code;
+    expect(code === "eof" || code === "helper_exit").toBe(true);
+  });
+
+  test("exact EOF on a truncated frame fails closed without spawning a child", async () => {
+    const transport = new OwnedHelperTransport({ helperPath: bunPath });
+    const decoder = new FrameDecoder(65536, 65536);
+    const anyt = transport as unknown as {
+      state: string;
+      decoder: FrameDecoder | null;
+      stdoutReader: ReadableStreamDefaultReader<Uint8Array> | null;
+      failError: unknown;
+      readStdout: () => Promise<void>;
+      dispatchFrame: (frame: Uint8Array) => void;
+    };
+    let completed = 0;
+    anyt.state = "starting";
+    anyt.decoder = decoder;
+    anyt.stdoutReader = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(Uint8Array.from([0, 0, 0, 20, 97, 98, 99]));
+        controller.close();
+      },
+    }).getReader();
+    anyt.dispatchFrame = () => {
+      completed += 1;
+    };
+    try {
+      await anyt.readStdout();
+      expect(anyt.failError).toBeInstanceOf(HelperProtocolError);
+      expect((anyt.failError as HelperProtocolError).code).toBe("eof");
+      expect(transport.state).toBe("failed");
+      expect(decoder.pending).toBe(7);
+      expect(completed).toBe(0);
+      expect(transport.lastPid).toBeNull();
+      expect(transport.pid).toBeNull();
+    } finally {
+      await closeTracked(transport);
+    }
   });
 
   test("valid partial frames coalesce into hello", async () => {
