@@ -156,3 +156,13 @@ Plans only (not runnable):
 - [checkpoints](docs/sandbox-checkpoints.md) — planned capture/store/restore
 - [local CI](docs/sandbox-local-ci.md) — planned act-in-guest
 - [smolvm features](audits/smolvm-features.md) — upstream source inventory
+
+Plans and acceptance contracts (planned / not implemented; not a production
+runtime):
+
+- Audits: [sandbox](audits/sandbox.md), [sandbox API](audits/sandbox-api.md),
+  [kernel/distro](audits/kernel-distro.md)
+- Desktop / Photon: [desktop distro](docs/desktop-distro.md),
+  [Photon Studio](docs/photon-studio.md),
+  [Photon contract](tests/native-distro/photon-studio/manifest.json)
+  (`not_run` / `blocked_prerequisites`)
