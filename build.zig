@@ -441,6 +441,120 @@ pub fn build(b: *std.Build) void {
     native_test_step.dependOn(&run_vm_pmm_check.step);
     native_test_step.dependOn(&native_vm_compile_install.step);
 
+    // KWP3a.2b: opt-in CPL0 private-VM probe. Distinct roots; default
+    // native-kernel is unchanged. Named options select positive and the
+    // two compile-time negative artifacts.
+    const n_vm_cr3 = mkNativeMod(b, "src/arch/x86_64/native/vm_cr3.zig", native_target, native_optimize);
+    const n_vm_fixture = mkNativeMod(b, "src/native/vm_probe_fixture.zig", native_target, native_optimize);
+    n_vm_fixture.addImport("user_elf", n_user_elf);
+    const n_vm_probe = mkNativeMod(b, "src/native/vm_probe.zig", native_target, native_optimize);
+    n_vm_probe.addImport("serial", n_serial);
+    n_vm_probe.addImport("gdt", n_gdt);
+    n_vm_probe.addImport("idt", n_idt);
+    n_vm_probe.addImport("paging", n_paging);
+    n_vm_probe.addImport("pmm", n_pmm);
+    n_vm_probe.addImport("boot_info", n_boot_info);
+    n_vm_probe.addImport("user_vm", n_user_vm);
+    n_vm_probe.addImport("user_vm_pmm", n_user_vm_pmm);
+    n_vm_probe.addImport("user_elf", n_user_elf);
+    n_vm_probe.addImport("vm_probe_fixture", n_vm_fixture);
+    n_vm_probe.addImport("vm_cr3", n_vm_cr3);
+
+    const addVmKernel = struct {
+        fn f(
+            b2: *std.Build,
+            t: std.Build.ResolvedTarget,
+            o: std.builtin.OptimizeMode,
+            main_mod: *std.Build.Module,
+            probe_mod: *std.Build.Module,
+            name: []const u8,
+            skip: bool,
+            wro: bool,
+        ) *std.Build.Step.Compile {
+            const opts = b2.addOptions();
+            opts.addOption(bool, "skip_switch", skip);
+            opts.addOption(bool, "writable_ro", wro);
+            const root_mod = b2.createModule(.{
+                .root_source_file = b2.path("src/native/vm_probe_root.zig"),
+                .target = t,
+                .optimize = o,
+                .red_zone = false,
+                .stack_check = false,
+                .omit_frame_pointer = true,
+                .code_model = .small,
+            });
+            root_mod.addImport("main", main_mod);
+            root_mod.addImport("vm_probe", probe_mod);
+            root_mod.addImport("vm_probe_options", opts.createModule());
+            const vm_kernel = b2.addExecutable(.{ .name = name, .root_module = root_mod });
+            vm_kernel.entry = .disabled;
+            vm_kernel.setLinkerScript(b2.path("linker/native-x86_64.ld"));
+            return vm_kernel;
+        }
+    }.f;
+
+    const vm_pos = addVmKernel(b, native_target, native_optimize, native_kernel_mod, n_vm_probe, "zk-kernel-vm-probe", false, false);
+    const vm_skip = addVmKernel(b, native_target, native_optimize, native_kernel_mod, n_vm_probe, "zk-kernel-vm-skip-switch", true, false);
+    const vm_wro = addVmKernel(b, native_target, native_optimize, native_kernel_mod, n_vm_probe, "zk-kernel-vm-writable-ro", false, true);
+    const vm_pos_install = b.addInstallArtifact(vm_pos, .{});
+    const vm_skip_install = b.addInstallArtifact(vm_skip, .{});
+    const vm_wro_install = b.addInstallArtifact(vm_wro, .{});
+    const vm_pos_step = b.step("native-kernel-vm-probe", "Build opt-in CPL0 VM probe kernel (not default)");
+    vm_pos_step.dependOn(&vm_pos_install.step);
+    const vm_skip_step = b.step("native-kernel-vm-skip-switch", "Build skip-switch negative VM probe kernel (not default)");
+    vm_skip_step.dependOn(&vm_skip_install.step);
+    const vm_wro_step = b.step("native-kernel-vm-writable-ro", "Build writable-RO negative VM probe kernel (not default)");
+    vm_wro_step.dependOn(&vm_wro_install.step);
+
+    const h_paging = b.createModule(.{
+        .root_source_file = b.path("src/arch/x86_64/native/paging.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    h_paging.addImport("serial", h_serial);
+    const h_vm_cr3 = b.createModule(.{
+        .root_source_file = b.path("src/arch/x86_64/native/vm_cr3.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    const h_vm_fixture = b.createModule(.{
+        .root_source_file = b.path("src/native/vm_probe_fixture.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    h_vm_fixture.addImport("user_elf", h_user_elf);
+    const h_vm_probe = b.createModule(.{
+        .root_source_file = b.path("src/native/vm_probe.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    h_vm_probe.addImport("serial", h_serial);
+    h_vm_probe.addImport("gdt", h_gdt);
+    h_vm_probe.addImport("idt", h_idt);
+    h_vm_probe.addImport("paging", h_paging);
+    h_vm_probe.addImport("pmm", h_pmm);
+    h_vm_probe.addImport("boot_info", h_boot_info);
+    h_vm_probe.addImport("user_vm", h_user_vm);
+    h_vm_probe.addImport("user_vm_pmm", h_user_vm_pmm);
+    h_vm_probe.addImport("user_elf", h_user_elf);
+    h_vm_probe.addImport("vm_probe_fixture", h_vm_fixture);
+    h_vm_probe.addImport("vm_cr3", h_vm_cr3);
+    const vm_probe_check = b.createModule(.{
+        .root_source_file = b.path("tests/native-user/vm_probe_check.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    vm_probe_check.addImport("user_elf", h_user_elf);
+    vm_probe_check.addImport("user_vm", h_user_vm);
+    vm_probe_check.addImport("vm_probe_fixture", h_vm_fixture);
+    vm_probe_check.addImport("vm_cr3", h_vm_cr3);
+    vm_probe_check.addImport("vm_probe", h_vm_probe);
+    const run_vm_probe_check = b.addRunArtifact(b.addTest(.{ .root_module = vm_probe_check, .use_llvm = true }));
+    const vm_probe_test_step = b.step("test-native-vm-probe", "Run hosted VM probe fixture/walker checks");
+    vm_probe_test_step.dependOn(&run_vm_probe_check.step);
+    native_test_step.dependOn(&run_vm_probe_check.step);
+    vm_step.dependOn(&run_vm_probe_check.step);
+
     // Host tools: initramfs builder + FAT16 ESP image builder.
     const mkinitramfs_mod = b.createModule(.{
         .root_source_file = b.path("tools/mkinitramfs.zig"),
@@ -500,6 +614,40 @@ pub fn build(b: *std.Build) void {
     const native_image_step = b.step("native-image", "Assemble native ESP image");
     native_image_step.dependOn(&run_mkesp.step);
 
+    const addVmEsp = struct {
+        fn f(
+            b2: *std.Build,
+            mkesp_exe: *std.Build.Step.Compile,
+            initrd: []const u8,
+            out_name: []const u8,
+            kernel_name: []const u8,
+            kernel_install: *std.Build.Step.InstallArtifact,
+            efi_install: *std.Build.Step.InstallArtifact,
+            mkinit: *std.Build.Step.Run,
+            native_prefix: []const u8,
+        ) *std.Build.Step.Run {
+            const run = b2.addRunArtifact(mkesp_exe);
+            run.addArgs(&.{
+                "--out", b2.pathJoin(&.{ native_prefix, out_name }),
+                "--size-mb", "64",
+                "--bootx64", b2.getInstallPath(.bin, "BOOTX64.efi"),
+                "--kernel", b2.getInstallPath(.bin, kernel_name),
+                "--initramfs", initrd,
+            });
+            run.step.dependOn(&mkinit.step);
+            run.step.dependOn(&kernel_install.step);
+            run.step.dependOn(&efi_install.step);
+            return run;
+        }
+    }.f;
+    const run_mkesp_vm_pos = addVmEsp(b, mkesp, initramfs_bin, "esp-vm-probe.img", "zk-kernel-vm-probe", vm_pos_install, native_efi_install, run_mkinitramfs, native_dir);
+    const run_mkesp_vm_skip = addVmEsp(b, mkesp, initramfs_bin, "esp-vm-skip-switch.img", "zk-kernel-vm-skip-switch", vm_skip_install, native_efi_install, run_mkinitramfs, native_dir);
+    const run_mkesp_vm_wro = addVmEsp(b, mkesp, initramfs_bin, "esp-vm-writable-ro.img", "zk-kernel-vm-writable-ro", vm_wro_install, native_efi_install, run_mkinitramfs, native_dir);
+    const vm_image_step = b.step("native-image-vm-probe", "Assemble opt-in VM probe ESP images (not default native-image)");
+    vm_image_step.dependOn(&run_mkesp_vm_pos.step);
+    vm_image_step.dependOn(&run_mkesp_vm_skip.step);
+    vm_image_step.dependOn(&run_mkesp_vm_wro.step);
+
     // Full native qualification. Direct Python on every host; Windows also
     // keeps scripts/qualify-native/qualify.ps1 as an optional wrapper.
     // imginfo basename follows the host executable suffix.
@@ -519,6 +667,22 @@ pub fn build(b: *std.Build) void {
     qualify_cmd.step.dependOn(&b.addInstallArtifact(imginfo, .{}).step);
     const qualify_step = b.step("qualify-native", "Run native QEMU/OVMF qualification");
     qualify_step.dependOn(&qualify_cmd.step);
+
+    const qualify_vm_cmd = b.addSystemCommand(&.{
+        python, "-B", "scripts/qualify-native/qualify_vm.py",
+        "--esp-image", b.pathJoin(&.{ native_dir, "esp-vm-probe.img" }),
+        "--loader", b.getInstallPath(.bin, "BOOTX64.efi"),
+        "--kernel", b.getInstallPath(.bin, "zk-kernel-vm-probe"),
+        "--initramfs", initramfs_bin,
+        "--imginfo", b.getInstallPath(.bin, imginfo_basename),
+        "--evidence-parent", b.pathJoin(&.{ b.install_prefix, "qualify-native-vm-evidence" }),
+        "--timeout", "90",
+        "--mode", "positive",
+    });
+    qualify_vm_cmd.step.dependOn(&run_mkesp_vm_pos.step);
+    qualify_vm_cmd.step.dependOn(&b.addInstallArtifact(imginfo, .{}).step);
+    const qualify_vm_step = b.step("qualify-native-vm", "Run opt-in CPL0 VM mapping qualification (not default bootstrap)");
+    qualify_vm_step.dependOn(&qualify_vm_cmd.step);
 
     const qualify_tests = b.addSystemCommand(&.{
         python, "-B", "scripts/qualify-native/run-tests.py",
