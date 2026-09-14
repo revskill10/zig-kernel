@@ -29,6 +29,10 @@ Thumbs.db
 # Env / secrets
 .env
 
+# TS0 sandbox SDK package (owned test/install output only)
+packages/zig-sandbox-client/node_modules/
+packages/zig-sandbox-client/*.tgz
+
 # Local verification artifacts
 .qemu-verdict.txt
 .qemu-direct.sh

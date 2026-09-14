@@ -34,8 +34,10 @@ The current `zig-sandbox` is only the diagnostic bootstrap documented in
 [README Sandbox API (diagnostics)](../README.md#sandbox-api-diagnostics) and
 [sandbox-api-implementation.md](../docs/sandbox-api-implementation.md). It
 reports `execution:false` and returns `501 execution_unavailable` for sandbox
-paths. It has no lifecycle backend, VM provider, durable state,
-authentication, client SDK, host-folder export, or local-engine mode. This
+paths. The diagnostic HTTP listener has no lifecycle backend, VM provider,
+durable state, authentication, client SDK, host-folder export, or local-engine
+mode. A separate unqualified private Bun TS0 helper package exists for local
+helper / remote diagnostics; neither mode has an execution backend. This
 plan does not alter that behavior.
 
 The Torkbot reference is also not an HTTP service. Historical local inspection
@@ -89,22 +91,31 @@ provider-specific credentials (historical local inspection:
 capability, not a reason to accept storage credentials from untrusted remote
 callers. The server owns durable-storage credentials.
 
-### 2.1 TypeScript facade and remote callback boundary
+### 2.1 TypeScript facade, remote callback broker, and local callback bridge
 
 **Planned required compatibility profile:** `@zig-sandbox/sdk` provides a
 Torkbot-shaped TypeScript facade.
 Its `defineSandbox`, `rootfs`, `fs`, `storage`, and `network` helpers build
-validated local declarations and map them to the versioned HTTP resources in
-Section 3. Its required planned API includes remote `boot`, `exec`, `spawn`,
-`pty`, guest `fs`, guest-routed `fetch`, `environmentFacts`, `close`, and
-`rootfs.flatten`. Each method first checks the selected profile capability and
-returns a typed unavailable result until its matching server/provider feature
-is qualified. That is client ergonomics, not a second server API: the HTTP
-server receives data, IDs, and bounded operation requests; it never
+validated declarations. **Remote binding:** those helpers map to the versioned
+HTTP resources in Section 3. **Local binding:** the same logical resource and
+subsystem interfaces bind to authorized native adapters or Bun callback
+adapters through a future `LocalAdapterRegistry` (proposed name, not shipped).
+Selecting `LocalEngineTransport` only chooses how to reach the engine; it is
+not the subsystem adapter registry and does not install filesystem, network,
+policy, store, clock, image, or VM contracts. Local mode does not serialize
+functions into remote HTTP JSON, and it does not require a user-managed API
+or callback-broker server.
+
+Its required planned API includes remote `boot`, `exec`, `spawn`, `pty`, guest
+`fs`, guest-routed `fetch`, `environmentFacts`, `close`, and `rootfs.flatten`.
+Each method first checks the selected profile capability and returns a typed
+unavailable result until its matching server/provider or local adapter feature
+is qualified. That is client ergonomics, not a second server API: a remote
+HTTP server receives data, IDs, and bounded operation requests; it never
 deserializes or executes a client's JavaScript function.
 
-Illustrative planned usage only; these names are not an installable package or
-final TypeScript signature:
+Illustrative planned usage only; these names are not an installable package,
+not a TS0 runnable program, and not a final TypeScript signature:
 
 ```ts
 const client = new SandboxClient({ transport });
@@ -123,20 +134,45 @@ try {
 }
 ```
 
-The selected transport, server capability response, and profile decide whether
-each call is available. The SDK never replaces a rejected Linux VM call with a
-Node, Windows, or macOS child process.
+Illustrative planned `/local` library usage only; not shipped by TS0, not
+helper/1, and not a runnable TypeScript program today:
+
+```ts
+import { LocalSandbox } from "@zig-sandbox/sdk/local";
+
+const withHostFs = await LocalSandbox.open({
+  helperPath,
+  adapters: {
+    filesystem: hostFolderFs({ roots: [approvedRoot], mode: "rw" }),
+  },
+});
+await withHostFs.close();
+
+const withSqliteFs = await LocalSandbox.open({
+  helperPath,
+  adapters: { filesystem: sqliteFs({ dbPath: approvedDb }) },
+});
+await withSqliteFs.close();
+```
+
+Rebinding filesystem adapters is a new open/epoch, not a mid-run privileged
+hot-swap. The selected transport, server or local capability response, and
+profile decide whether each call is available. The SDK never replaces a
+rejected Linux VM call with a Node, Windows, or macOS child process.
 
 Planned `vm.close()` and asynchronous disposal map to durable stop/reap: they
 end the active VM and release running capacity, retain only declared eligible
 persistent volume and export-origin state, and clean up explicitly ephemeral
 state according to the resource policy. They do not mean destroy or tombstone
 the sandbox. `destroy` remains a separate generation-fenced, idempotent server
-operation. SDK aborting a wait/stream is neither close nor durable cancel.
+operation. SDK aborting a wait/stream is neither close, durable cancel, nor
+local adapter-registry revoke.
 
 Torkbot virtual filesystems and network middleware are callbacks, so they
-cannot be serialized in JSON. Remote callback compatibility therefore requires
-a separately registered **planned callback broker**, not a function string:
+cannot be serialized in JSON. **Remote** callback compatibility therefore
+requires a separately registered, separately deployed **planned callback
+broker**, not a function string. That broker is an authenticated companion
+for remote callers; it is not the local `/local` callback path:
 
 1. The SDK registers an opaque callback ID for one sandbox/resource and its
    authenticated principal.
@@ -157,12 +193,76 @@ through an active, authenticated same-origin connection that meets the
 delivery/deadline contract; otherwise callback filesystem/policy features are
 absent from its advertised SDK capability set.
 
-The SDK itself remains a pure remote client and never launches a VM or host
-process. A trusted local broker companion is a separately deployed service
-with narrowly granted callback and, where approved, local-folder authority; it
-still does not select or launch the VM provider. The authenticated server-side
-provider companion owns VM launch. Their identities, leases, and failure modes
-are explicit rather than being inherited from the SDK process.
+**Remote entrypoint (`@zig-sandbox/sdk` / `/remote`):** the SDK remains a pure
+remote client and never launches a VM or host process, and it must not fall
+back to local helper spawn when the server rejects a call. Remote traffic
+cannot activate a local adapter registry, spawn the local helper, or inherit
+the embedding application's filesystem, network, or credential authority.
+
+**Local entrypoint (`@zig-sandbox/sdk/local`, TS0 2026-09-14):** the SDK may
+own a pinned Zig userspace helper and, later, a selected VM provider. That
+local runtime is an explicit import, not a remote fallback. TS0 still reports
+execution unavailable and speaks only the diagnostic helper/1 one-inflight
+protocol; aborting that diagnostic call may tear down the helper/1 channel.
+That teardown is a TS0 diagnostic fact, not the future executing-VM
+wait-abort contract. Callbacks are absent and unadvertised. `LocalAdapterRegistry`,
+bidirectional callback IPC, SQLiteFS, filesystem/network/policy callback
+registration, guest mount bridges, and real provider execution remain
+unavailable until a later version-negotiated bridge protocol plus
+provider/adapter qualification pass.
+The local helper source is an intended Windows/Linux
+x64 draft until the actual host matrix passes; it is not qualified by
+cross-compile.
+
+**Planned Bun-local subsystem adapters.** A future Bun application imports
+`/local` and registers typed adapter-contract handles at open. The SDK owns
+the private bidirectional native-helper IPC, the callback registry, and their
+lifetimes. A **local callback bridge** is an automatic SDK-owned component of
+that LocalSandbox runtime; local mode does not require a user-managed API
+server or callback-broker process. Automatic helper/dispatcher/provider
+processes may exist, but the library owns and documents their lifetime and
+authority. Bun JavaScript callbacks run on the embedding Bun event loop or an
+SDK-owned, explicitly qualified Worker; they are never invoked from an
+arbitrary native helper or provider OS thread. No function, source, `eval`,
+or import string crosses the private IPC. Every call is versioned and bound
+to runtime, lease, generation, resource, principal, adapter version, and
+declared rights, with separate engine-request and callback-request
+namespaces, bounded queues and bytes, deadlines, cancel, revoke, and
+parent-death behavior independent of ordinary JS finalization. Cancellation
+and revocation scopes are distinct: a wait/stream `AbortSignal` detaches and
+settles only that waiter; a callback-request cancel/deadline revokes only
+that invocation and rejects its late response under the adapter's
+fence/unknown-side-effect contract; explicit durable operation cancel is a
+separate fenced engine operation; explicit revoke of one resource, lease,
+or registration revokes only that scope, its handles, and dependent I/O and
+epoch, while unrelated adapters and leases remain usable; runtime close,
+helper/Bun death, or explicit whole-registry revoke tears down that
+runtime's registry. TS0 helper/1 diagnostic-channel abort teardown remains
+a one-inflight diagnostic fact and is not the future executing-VM
+wait-abort contract. A new runtime, rebind, restart, or revoke creates a
+new epoch scoped to the affected resource or registry; IDs and replies from
+prior epochs are rejected and are never promoted onto the new runtime or
+resource. Local callback IPC byte ownership follows the shared rule in
+[sandbox.md §8.1](sandbox.md#81-required-typescript-sdk): copied
+request/reply payloads or owned versioned byte handles; the producer
+releases source ownership only after copy or transfer; internal
+borrowed/scratch/invocation buffers release on completion, cancel, or
+revoke; delivered copied or transferred bytes remain caller-owned and valid
+until caller disposal or GC, including after completion, cancel, or later
+revoke of handles/authority; a late canceled callback cannot publish a new
+result; Worker transfer, if used, detaches sole ownership; the initial
+profile rejects shared-memory shortcuts. See
+[sandbox.md §5.1](sandbox.md#51-swappable-subsystem-contracts) for the full
+subsystem map and [sandbox.md §8.1](sandbox.md#81-required-typescript-sdk)
+for SDK ownership and TS0 limits.
+
+This local callback bridge is not the remote callback broker. For remote
+callers, the trusted authenticated callback-broker companion remains a
+separately deployed service with narrowly granted callback and, where
+approved, local-folder authority. It still does not select or launch the VM
+provider for remote callers. The authenticated server-side provider companion
+owns VM launch for remote mode. Identities, leases, and failure modes stay
+explicit rather than being inherited from the SDK process.
 
 ### 2.2 Storage, folders, architecture, and integer fidelity
 
@@ -229,7 +329,10 @@ failure is terminal or recovering, never a silent cold boot.
 
 The [normative planned route table](sandbox.md#6-server-specification) controls
 route names, fields, and statuses. This plan maps the Torkbot-shaped facade to
-those routes instead of inventing vendor REST:
+those routes instead of inventing vendor REST. The table is the **remote HTTP**
+binding. Local `/local` binds the same logical operations to the SDK-owned
+helper and a future adapter registry; it does not POST JavaScript to these
+routes, and it does not require the application to run this HTTP API.
 
 | Planned facade action | Planned HTTP route |
 | --- | --- |
@@ -282,8 +385,12 @@ current `execution_unavailable` 501 remains correct until a qualified backend
 replaces it.
 
 An SDK `AbortSignal` closes only that caller's wait/stream. It neither
-asserts workload completion nor cancels the workload. Durable cancellation is a
-separate idempotent operation. 501 is non-retryable feature absence; bounded
+asserts workload completion, cancels the workload, nor revokes a local
+adapter registry. Durable cancellation is a separate idempotent operation.
+Local callback-request cancel, durable execution cancel, scoped
+resource/lease/registration revoke, and whole-runtime/registry teardown
+remain the distinct scopes in §2.1 and
+[sandbox.md §8.1](sandbox.md#81-required-typescript-sdk). 501 is non-retryable feature absence; bounded
 network/timeout/503 retry policy belongs to the caller; 401 starts the chosen
 transport's authentication flow.
 
@@ -335,15 +442,19 @@ invisibly.
 
 | Planned artifact | Responsibility | Prohibited authority |
 | --- | --- | --- |
-| `packages/zig-sandbox-client` (`@zig-sandbox/sdk`) | Node/browser client, versioned types, selected transport, capabilities, bounded operations/events. | VM launch, shell/process execution, host-directory access, undocumented provider fallback, authorization decisions. |
-| `packages/zig-sandbox-core-wasm` | `wasm32-freestanding` codec, validation, stable error mapping, advisory transition checks. | Ambient imports, filesystem, sockets, subprocesses, KVM, mounts, persistence, token acquisition, execution authority. |
-| `guest/wasm/` | In-VM WASI profile and hostile-module corpus. | Browser privilege inheritance, SDK-core authority, unrestricted host tools, implicit native fallback. |
+| `packages/zig-sandbox-client` root and `/remote` (`@zig-sandbox/sdk`, `@zig-sandbox/sdk/remote`) | Node/browser remote client, versioned types, selected transport, capabilities, bounded operations/events. | VM launch, shell/process execution, host-directory access, local helper spawn, undocumented provider fallback, authorization decisions. Importing the package does not grant those. |
+| `packages/zig-sandbox-client` `/local` (`@zig-sandbox/sdk/local`) | Bun-focused local library: SDK-owned helper, future `LocalAdapterRegistry`, private IPC, callback registry/lifetime, and capability-gated operations. TS0 remains diagnostic helper/1 only. | Ordinary host workload exec; ambient directory export; remote-to-local spawn; unauthenticated path/SQL authority; function serialization/`eval`; JS callbacks on native helper threads; claiming Bun `sqlite` is POSIX filesystem or a host-jail fallback. Qualified host-folder and SQLiteFS adapters may be registered only through the versioned filesystem contract. |
+| `packages/zig-sandbox-core-wasm` | `wasm32-freestanding` codec, validation, stable error mapping, advisory transition checks. Separate from `/local` and from guest Wasm. | Ambient imports, filesystem, sockets, subprocesses, KVM, mounts, persistence, token acquisition, execution authority. |
+| `guest/wasm/` | In-VM WASI profile and hostile-module corpus. Separate from the portable SDK core. | Browser privilege inheritance, SDK-core authority, unrestricted host tools, implicit native fallback. |
 
 Node may select mTLS or a UDS transport where deployed; UDS is Node-only.
 Browsers require a same-origin proxy and cannot assume CORS, UDS, direct mTLS,
-or host-path access. TypeScript and portable-core implementations consume the
-same OpenAPI/JSON vectors for capability/error/cursor/idempotency behavior.
-Passing portable-core vectors does not qualify guest WASI execution.
+or host-path access. Browser and remote entrypoints never launch a VM, host
+process, or local helper. In-process Node-API bindings are a separate future
+track and do not qualify Bun `/local`. Node/Deno/macOS/ARM remain unqualified.
+TypeScript and portable-core implementations consume the same OpenAPI/JSON
+vectors for capability/error/cursor/idempotency behavior. Passing portable-core
+vectors does not qualify guest WASI execution.
 
 ## 6. Phases and gates
 
@@ -354,7 +465,7 @@ Passing portable-core vectors does not qualify guest WASI execution.
 | AP2 | Authenticated durable server/store/audit core, no provider yet. **Not started.** The SQLite amalgamation wrapper is not this store. | Crash/restart, leases, redaction, idempotency, cursor expiry pass; capabilities still say no execution. |
 | AP3 | `engine/*`, provider/guest/workspace/export adapters for Linux QEMU/KVM `linux-vm/<arch>` with mandatory live pause/resume. Depends on sandbox WP5-WP9. | Fresh boot, exec, PTY/channels, files, blob/block/overlay and masked-export conformance, transfer, egress denial, pause/resume of same execution/event cursor, stop/destroy, cleanup, hostile guest corpus pass on pinned manifest bytes. Snapshot/restore stays optional. |
 | AP4 | macOS QEMU/HVF and Windows QEMU/WHPX provider adapters with the same mandatory live pause/resume contract. Depends on AP3 and sandbox WP5-WP9. | Each Section 4.1 row passes, including mount/network/pause/recovery; unsupported combinations fail typed with no native fallback. |
-| AP5 | `packages/zig-sandbox-client/*`, `packages/zig-sandbox-core-wasm/*`, `guest/wasm/*`, and trusted callback-broker companion. Depends on sandbox WP10b-WP10c. | Package, Node/browser transport, callback tenant binding/disconnect/deadline/backpressure, callback egress non-escalation, ABI/import/Worker, guest-WASI, cursor/reconnect, abort-versus-cancel, no-host-exec tests pass. |
+| AP5 | `packages/zig-sandbox-client/*`, `packages/zig-sandbox-core-wasm/*`, `guest/wasm/*`, remote trusted callback-broker companion, and future Bun `/local` callback bridge. Depends on sandbox WP10b-WP10c. | Remote: package, Node/browser transport, callback tenant binding/disconnect/deadline/backpressure, callback egress non-escalation, ABI/import/Worker, guest-WASI, cursor/reconnect, abort-versus-cancel, no-host-exec tests pass. **Future Bun-local (not TS0):** a fresh application imports `/local`, registers host-folder then SQLiteFS adapters, opens and owns helper/dispatcher/provider with no user-managed API or broker process, and runs the same guest filesystem conformance plus callback failure/revoke/queue/cleanup, abort-scope, epoch-rejection, and byte-ownership tests; remote parity without host-exec fallback. See [sandbox.md §11.2](sandbox.md#112-adapter-conformance). |
 | AP6 | Release/runbook qualification and callback/export/provider operational evidence. Depends on AP1-AP5. | Signed artifacts, SBOMs, recovery drills, provider/image support matrix, callback/broker revocation drills, and evidence manifest are published per candidate. |
 
 The broader prerequisites remain in [sandbox.md](sandbox.md): [swappable
@@ -373,8 +484,9 @@ virtualization facts, guest profile, and test evidence proving:
 1. Linux workloads run only in the selected qualified Linux guest profile.
 2. Unavailable hosting returns typed failure on every host without fallback.
 3. Client/server/portable-WASM vectors interpret capabilities and errors alike.
-4. Aborting a wait leaves durable workload state observable; cancellation is
-   explicit.
+4. Aborting a wait leaves durable workload state observable and leaves
+   registered local adapters usable; cancellation is explicit. Prior-epoch
+   IDs are rejected after a new runtime/rebind/restart.
 5. Remote client paths cannot become exports; each live export is authorized.
 6. Host/provider credentials are absent from guest files, logs, error detail,
    events, and export metadata. Any explicitly authorized user-secret feature

@@ -1,0 +1,123 @@
+name: Sandbox SDK TS0
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "packages/zig-sandbox-client/**"
+      - "supervisor/sdk_helper.zig"
+      - "supervisor/sdk_helper_main.zig"
+      - "supervisor/bootstrap.zig"
+      - "supervisor/contract.zig"
+      - "build.zig"
+      - ".github/workflows/sandbox-sdk.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "packages/zig-sandbox-client/**"
+      - "supervisor/sdk_helper.zig"
+      - "supervisor/sdk_helper_main.zig"
+      - "supervisor/bootstrap.zig"
+      - "supervisor/contract.zig"
+      - "build.zig"
+      - ".github/workflows/sandbox-sdk.yml"
+  workflow_dispatch:
+
+# Windows/Linux x64 helper + package integration. This workflow does not
+# qualify macOS, ARM, Node, Deno, or production sandbox execution.
+jobs:
+  helper-and-package:
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bun: "1.4.2"
+            zig: "0.16.0"
+          - os: windows-latest
+            bun: "1.4.2"
+            zig: "0.16.0"
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        timeout-minutes: 5
+        uses: actions/checkout@v4
+
+      - name: Install Zig ${{ matrix.zig }}
+        timeout-minutes: 5
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ matrix.zig }}
+
+      - name: Install Bun ${{ matrix.bun }}
+        timeout-minutes: 5
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun }}
+
+      - name: Build helper and run Zig protocol tests
+        timeout-minutes: 10
+        run: |
+          zig build sandbox-helper
+          zig build test-sdk-helper
+
+      - name: Resolve helper path
+        timeout-minutes: 2
+        id: helper
+        run: |
+          if [ -f zig-out/bin/zig-sandbox-helper.exe ]; then
+            echo "path=${GITHUB_WORKSPACE}/zig-out/bin/zig-sandbox-helper.exe" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=${GITHUB_WORKSPACE}/zig-out/bin/zig-sandbox-helper" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package install, typecheck, and integration
+        timeout-minutes: 12
+        working-directory: packages/zig-sandbox-client
+        env:
+          ZIG_SANDBOX_HELPER: ${{ steps.helper.outputs.path }}
+          SANDBOX_SDK_TEST_ROOT: ${{ github.workspace }}/.tmp/sdk-test-scratch
+          BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.tmp/bun-cache
+          npm_config_cache: ${{ github.workspace }}/.tmp/npm-cache
+          TMP: ${{ github.workspace }}/.tmp/sdk-test-scratch
+          TEMP: ${{ github.workspace }}/.tmp/sdk-test-scratch
+          TMPDIR: ${{ github.workspace }}/.tmp/sdk-test-scratch
+        run: |
+          bun --version
+          test "$(bun --version)" = "${{ matrix.bun }}"
+          mkdir -p "$SANDBOX_SDK_TEST_ROOT/receipts" "$BUN_INSTALL_CACHE_DIR" "$npm_config_cache"
+          bun install --frozen-lockfile
+          bun run build
+          bun test tests --timeout 30000 | tee "$SANDBOX_SDK_TEST_ROOT/receipts/bun-test.log"
+
+      - name: Retain receipts and bounded cleanup
+        if: always()
+        timeout-minutes: 3
+        env:
+          SANDBOX_SDK_TEST_ROOT: ${{ github.workspace }}/.tmp/sdk-test-scratch
+        run: |
+          mkdir -p "$SANDBOX_SDK_TEST_ROOT/receipts"
+          {
+            echo "os=${{ matrix.os }}"
+            echo "bun=${{ matrix.bun }}"
+            echo "zig=${{ matrix.zig }}"
+            echo "helper=${{ steps.helper.outputs.path }}"
+            echo "completed=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > "$SANDBOX_SDK_TEST_ROOT/receipts/job.txt"
+          if [ -d "$SANDBOX_SDK_TEST_ROOT" ]; then
+            find "$SANDBOX_SDK_TEST_ROOT" -name ".sandbox-sdk-test" -type f | head -n 50 > "$SANDBOX_SDK_TEST_ROOT/receipts/owned-dirs.txt" || true
+          fi
+
+      - name: Upload structured receipts
+        if: always()
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-sdk-receipts-${{ matrix.os }}
+          path: ${{ github.workspace }}/.tmp/sdk-test-scratch/receipts
+          if-no-files-found: warn
+          retention-days: 14
