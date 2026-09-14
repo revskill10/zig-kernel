@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zig-sandbox.local/schemas/error-canonical.json",
+  "title": "Canonical production error envelope",
+  "description": "Planned AP2+ service envelope. Distinct from the bootstrap nested diagnostic envelope. request_id is an OpaqueId, never an all-digit string. Explicit JSON null is rejected for required non-nullable properties.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "message", "request_id", "retryable"],
+  "properties": {
+    "code": {
+      "type": "string",
+      "enum": [
+        "invalid_request",
+        "unauthenticated",
+        "forbidden",
+        "not_found",
+        "conflict",
+        "stale_generation",
+        "idempotency_conflict",
+        "limit",
+        "payload_too_large",
+        "cursor_expired",
+        "unsupported_host",
+        "unsupported_image",
+        "unsupported",
+        "capacity",
+        "guest_failure",
+        "resource_limit",
+        "deadline",
+        "unavailable",
+        "internal"
+      ]
+    },
+    "message": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]*[A-Za-z._:-][A-Za-z0-9._:-]*(?![\\s\\S])"
+    },
+    "retryable": { "type": "boolean" },
+    "detail": {
+      "type": "object",
+      "maxProperties": 8,
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32,
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])"
+      },
+      "additionalProperties": {
+        "type": ["string", "boolean", "null"],
+        "maxLength": 4096
+      },
+      "description": "Optional bounded object of validated scalars. Omitted when empty. Nested objects/arrays are rejected."
+    }
+  }
+}

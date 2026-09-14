@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zig-sandbox.local/schemas/capabilities-diagnostic.json",
+  "title": "Diagnostic bootstrap capabilities document",
+  "type": "object",
+  "required": ["backends", "guest_abis", "images", "features", "ceilings"],
+  "properties": {
+    "backends": { "type": "array", "maxItems": 0 },
+    "guest_abis": { "type": "array", "maxItems": 0 },
+    "images": { "type": "array", "maxItems": 0 },
+    "features": {
+      "type": "object",
+      "required": ["execution", "network_modes", "snapshots", "forks", "sse"],
+      "properties": {
+        "execution": { "type": "boolean", "const": false },
+        "network_modes": { "type": "array", "maxItems": 0 },
+        "snapshots": { "type": "boolean", "const": false },
+        "forks": { "type": "boolean", "const": false },
+        "sse": { "type": "boolean", "const": false }
+      }
+    },
+    "ceilings": { "type": "object", "maxProperties": 0 }
+  }
+}

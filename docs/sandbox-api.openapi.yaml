@@ -1,323 +1,1129 @@
 openapi: 3.1.0
 info:
-  title: zig-kernel Sandbox API
-  version: 1.0.0
+  title: zig-sandbox API
+  version: "1"
   description: |
-    Agent sandbox public API (M1 contract freeze).
-    Transport: Unix socket on Linux host first. Remote requires authenticated transport.
-    All sandbox-scoped ops check ownership. Mutating ops are idempotent via Idempotency-Key.
+    Versioned sandbox control-plane contract.
+
+    Two error envelopes exist and must not be mixed:
+
+    1. Diagnostic nested envelope (current `zig-sandbox` bootstrap listener):
+       `{"error":{"code":"...","message":"..."}}`.
+       Capabilities report `execution:false`. Sandbox routes return 501
+       `execution_unavailable`. `/readyz` is 503. `/v1/exports` and other
+       non-sandbox planned catalog routes return 404. This listener is
+       anonymous diagnostics, not production authentication.
+
+    2. Canonical production envelope (planned AP2+ service):
+       `{"code":"...","message":"...","request_id":"...","retryable":true|false,"detail":{}}`.
+       `detail` is optional, bounded, and redacted. 501 is non-retryable
+       feature absence.
+
+    Bootstrap availability is recorded with `x-bootstrap-status` on each
+    operation. A ready boolean cannot advertise execution. Execution may be
+    advertised only after a qualified provider inventory and composed
+    auth/store/launcher/guest controls exist.
+
+    Wire numbers that may exceed JavaScript MAX_SAFE_INTEGER are canonical
+    base-10 strings. Opaque IDs and event cursors are protocol strings, never
+    numeric counters. Caller-supplied owner fields are rejected.
+
+    Assigned facade extension routes (AP1): processes, terminals, channels,
+    guest-routed fetch, image materialize, and callback broker. They remain
+    capability-gated and are 501/404 on the diagnostic bootstrap.
+
+    Security: diagnostic `/healthz`, `/readyz`, and `/v1/capabilities` are
+    anonymous. The remote machine-readable contract requires MutualTLS only.
+    Local OS peer identity is not an HTTP security scheme and is never an
+    apiKey header. A separately generated local transport profile consumes
+    listener-supplied `x-local-ipc-*` metadata (Linux SO_PEERCRED pid/uid/gid,
+    Windows named-pipe SID, macOS LOCAL_PEERPID / audit token — not
+    SO_PEERCRED). A client-supplied identity header never authenticates.
+    Bearer tokens are a separately qualified extension and are not an mTLS
+    fallback.
 servers:
-  - url: http://localhost
+  - url: http://127.0.0.1:8080
+    description: Diagnostic bootstrap only. Loopback is an address scope, not an identity.
 tags:
+  - name: diagnostics
+  - name: capabilities
   - name: sandboxes
   - name: executions
+  - name: processes
   - name: files
+  - name: exports
   - name: events
+  - name: operations
+  - name: callbacks
+security:
+  - MutualTLS: []
+x-local-ipc-identity:
+  description: |
+    Local transport identity is derived by the listener from the OS peer
+    before HTTP parsing. It is not an OpenAPI security scheme and must not be
+    sent or read as a request header. Generated local IPC profiles consume
+    these fields; the remote HTTP document remains MutualTLS-only.
+x-local-ipc-peer-pid:
+  description: Process identifier from SO_PEERCRED, LOCAL_PEERPID, or equivalent. Listener-supplied.
+  type: integer
+  minimum: 0
+x-local-ipc-peer-uid:
+  description: Linux peer UID from SO_PEERCRED. Unused on Windows. Listener-supplied.
+  type: integer
+  minimum: 0
+x-local-ipc-peer-gid:
+  description: Linux peer GID from SO_PEERCRED. Unused on Windows. Listener-supplied.
+  type: integer
+  minimum: 0
+x-local-ipc-peer-sid:
+  description: Windows named-pipe client SID. Listener-supplied, never a request header.
+  type: string
+x-local-ipc-audit-token:
+  description: macOS audit token from LOCAL_PEERPID/audit token APIs, not SO_PEERCRED. Listener-supplied.
+  type: string
 paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      tags: [diagnostics]
+      security: []
+      x-bootstrap-status: 200
+      x-error-envelope: diagnostic_nested
+      summary: Process liveness. Does not mean execution is available.
+      responses:
+        "200":
+          description: listening
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+    head:
+      operationId: headHealth
+      tags: [diagnostics]
+      security: []
+      x-bootstrap-status: 200
+      responses:
+        "200": { description: same headers as GET, empty body }
+  /readyz:
+    get:
+      operationId: getReady
+      tags: [diagnostics]
+      security: []
+      x-bootstrap-status: 503
+      x-error-envelope: diagnostic_nested
+      summary: Execution readiness. Bootstrap is deliberately not ready.
+      responses:
+        "503":
+          description: execution unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, reason]
+                properties:
+                  status: { type: string, const: not_ready }
+                  reason: { type: string, const: execution_unavailable }
+    head:
+      operationId: headReady
+      tags: [diagnostics]
+      security: []
+      x-bootstrap-status: 503
+      responses:
+        "503": { description: same headers as GET, empty body }
   /v1/capabilities:
     get:
       operationId: getCapabilities
-      summary: Supported backends, ABIs, images, features, ceilings
+      tags: [capabilities]
+      security: []
+      x-bootstrap-status: 200
+      summary: Truthful provider, profile, and feature inventory
       responses:
-        '200':
+        "200":
           description: capabilities
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Capabilities'
+              schema: { $ref: "#/components/schemas/Capabilities" }
+              examples:
+                bootstrap:
+                  value:
+                    backends: []
+                    guest_abis: []
+                    images: []
+                    features:
+                      execution: false
+                      network_modes: []
+                      snapshots: false
+                      forks: false
+                      sse: false
+                    ceilings: {}
+        "401": { $ref: "#/components/responses/CanonicalError" }
+    head:
+      operationId: headCapabilities
+      tags: [capabilities]
+      security: []
+      x-bootstrap-status: 200
+      responses:
+        "200": { description: same headers as GET, empty body }
   /v1/sandboxes:
     post:
       operationId: createSandbox
-      summary: Create sandbox session from immutable image
+      tags: [sandboxes]
+      x-bootstrap-status: 501
+      summary: Create sandbox from a pinned image/profile
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/SandboxCreate'
+            schema: { $ref: "#/components/schemas/SandboxCreate" }
       responses:
-        '202':
-          description: accepted
+        "202":
+          description: accepted operation
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/Sandbox'
-        '400': { $ref: '#/components/responses/Error' }
-        '409': { $ref: '#/components/responses/Error' }
+              schema: { $ref: "#/components/schemas/Operation" }
+        "400": { $ref: "#/components/responses/CanonicalError" }
+        "401": { $ref: "#/components/responses/CanonicalError" }
+        "403": { $ref: "#/components/responses/CanonicalError" }
+        "409": { $ref: "#/components/responses/CanonicalError" }
+        "413": { $ref: "#/components/responses/CanonicalError" }
+        "422": { $ref: "#/components/responses/CanonicalError" }
+        "429": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+        "503": { $ref: "#/components/responses/CanonicalError" }
+    get:
+      operationId: listSandboxes
+      tags: [sandboxes]
+      x-bootstrap-status: 501
+      summary: Owner-paginated list
+      parameters:
+        - $ref: "#/components/parameters/PageCursor"
+      responses:
+        "200":
+          description: page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SandboxList" }
+        "401": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
   /v1/sandboxes/{id}:
+    parameters:
+      - $ref: "#/components/parameters/SandboxId"
     get:
       operationId: getSandbox
-      parameters:
-        - $ref: '#/components/parameters/SandboxId'
+      tags: [sandboxes]
+      x-bootstrap-status: 501
       responses:
-        '200':
+        "200":
+          description: sandbox
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Sandbox' }
-          description: sandbox
-        '404': { $ref: '#/components/responses/Error' }
+              schema: { $ref: "#/components/schemas/Sandbox" }
+        "401": { $ref: "#/components/responses/CanonicalError" }
+        "404": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
     delete:
       operationId: destroySandbox
-      summary: Idempotent destroy of VM + writable storage
+      tags: [sandboxes]
+      x-bootstrap-status: 501
       parameters:
-        - $ref: '#/components/parameters/SandboxId'
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+        - $ref: "#/components/parameters/ExpectedGenerationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GenerationBody" }
       responses:
-        '200':
+        "202":
+          description: destroy operation
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Sandbox' }
-          description: destroyed
-        '404': { $ref: '#/components/responses/Error' }
+              schema: { $ref: "#/components/schemas/Operation" }
+        "200":
+          description: replayed tombstone
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Sandbox" }
+        "409": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
   /v1/sandboxes/{id}/executions:
     post:
       operationId: startExecution
-      summary: Start executable (accepted only when sandbox ready)
+      tags: [executions]
+      x-bootstrap-status: 501
       parameters:
-        - $ref: '#/components/parameters/SandboxId'
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ExecutionCreate' }
+            schema: { $ref: "#/components/schemas/ExecutionCreate" }
       responses:
-        '202':
+        "202":
+          description: accepted
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Execution' }
-          description: accepted
-        '400': { $ref: '#/components/responses/Error' }
-        '404': { $ref: '#/components/responses/Error' }
-        '409': { $ref: '#/components/responses/Error' }
-  /v1/sandboxes/{id}/executions/{execId}:
+              schema: { $ref: "#/components/schemas/Operation" }
+        "400": { $ref: "#/components/responses/CanonicalError" }
+        "401": { $ref: "#/components/responses/CanonicalError" }
+        "404": { $ref: "#/components/responses/CanonicalError" }
+        "409": { $ref: "#/components/responses/CanonicalError" }
+        "422": { $ref: "#/components/responses/CanonicalError" }
+        "429": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+        "503": { $ref: "#/components/responses/CanonicalError" }
+  /v1/sandboxes/{id}/executions/{exec}:
     get:
       operationId: getExecution
+      tags: [executions]
+      x-bootstrap-status: 501
       parameters:
-        - $ref: '#/components/parameters/SandboxId'
-        - name: execId
-          in: path
-          required: true
-          schema: { type: string }
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/ExecutionId"
       responses:
-        '200':
+        "200":
+          description: execution
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Execution' }
-          description: execution
-        '404': { $ref: '#/components/responses/Error' }
-  /v1/sandboxes/{id}/executions/{execId}/cancel:
+              schema: { $ref: "#/components/schemas/Execution" }
+        "404": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/sandboxes/{id}/executions/{exec}/cancel:
     post:
       operationId: cancelExecution
-      summary: Idempotent cancel, host-escalated
+      tags: [executions]
+      x-bootstrap-status: 501
+      summary: Durable cancel. Client AbortSignal is not this operation.
       parameters:
-        - $ref: '#/components/parameters/SandboxId'
-        - $ref: '#/components/parameters/IdempotencyKey'
-        - name: execId
-          in: path
-          required: true
-          schema: { type: string }
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/ExecutionId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GenerationBody" }
       responses:
-        '200':
+        "202":
+          description: cancelling
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Execution' }
-          description: cancelled/cancelling
-        '404': { $ref: '#/components/responses/Error' }
-  /v1/sandboxes/{id}/events:
-    get:
-      operationId: getEvents
-      summary: Ordered output + lifecycle events (poll; SSE upgrade optional)
-      parameters:
-        - $ref: '#/components/parameters/SandboxId'
-        - name: after
-          in: query
-          required: false
-          schema: { type: integer, minimum: 0, default: 0 }
-          description: exclusive cursor
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, minimum: 1, maximum: 1000, default: 200 }
-      responses:
-        '200':
+              schema: { $ref: "#/components/schemas/Operation" }
+        "200":
+          description: already terminal
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/EventPage' }
-          description: events
-        '404': { $ref: '#/components/responses/Error' }
+              schema: { $ref: "#/components/schemas/Execution" }
+        "409": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
   /v1/sandboxes/{id}/files:
+    parameters:
+      - $ref: "#/components/parameters/SandboxId"
+      - $ref: "#/components/parameters/GuestPath"
     put:
       operationId: uploadFile
-      summary: Bounded upload into writable workspace
+      tags: [files]
+      x-bootstrap-status: 501
       parameters:
-        - $ref: '#/components/parameters/SandboxId'
-        - $ref: '#/components/parameters/IdempotencyKey'
-        - name: path
-          in: query
-          required: true
-          schema: { type: string }
-          description: workspace-absolute path e.g. /workspace/tool
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+        - $ref: "#/components/parameters/ExpectedGenerationHeader"
       requestBody:
         required: true
         content:
           application/octet-stream:
             schema: { type: string, format: binary }
       responses:
-        '200':
+        "201":
+          description: stored
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/FileMeta' }
-          description: stored
-        '400': { $ref: '#/components/responses/Error' }
-        '404': { $ref: '#/components/responses/Error' }
-        '409': { $ref: '#/components/responses/Error' }
-        '413': { $ref: '#/components/responses/Error' }
+              schema: { $ref: "#/components/schemas/FileMeta" }
+        "409": { $ref: "#/components/responses/CanonicalError" }
+        "413": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
     get:
       operationId: downloadFile
-      summary: Bounded workspace download
-      parameters:
-        - $ref: '#/components/parameters/SandboxId'
-        - name: path
-          in: query
-          required: true
-          schema: { type: string }
+      tags: [files]
+      x-bootstrap-status: 501
       responses:
-        '200':
+        "200":
           description: file bytes
           content:
             application/octet-stream:
               schema: { type: string, format: binary }
-        '404': { $ref: '#/components/responses/Error' }
+        "404": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/sandboxes/{id}/events:
+    get:
+      operationId: getEvents
+      tags: [events]
+      x-bootstrap-status: 501
+      parameters:
+        - $ref: "#/components/parameters/SandboxId"
+        - name: after
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/OpaqueId" }
+          description: exclusive opaque cursor, never a numeric counter
+        - name: limit
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/DecimalU64" }
+      responses:
+        "200":
+          description: event page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EventPage" }
+        "410": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
   /v1/sandboxes/{id}/reset:
     post:
       operationId: resetSandbox
-      summary: Terminate execution, recreate session from original image. Bumps generation.
+      tags: [sandboxes]
+      x-bootstrap-status: 501
       parameters:
-        - $ref: '#/components/parameters/SandboxId'
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GenerationBody" }
       responses:
-        '200':
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "409": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/sandboxes/{id}/stop:
+    post:
+      operationId: stopSandbox
+      tags: [sandboxes]
+      x-bootstrap-status: 501
+      summary: Kill/reap VM; do not preserve live RAM/process state
+      parameters:
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GenerationBody" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "409": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/sandboxes/{id}/start:
+    post:
+      operationId: startSandbox
+      tags: [sandboxes]
+      x-bootstrap-status: 501
+      summary: Fresh VM instance; prior executions are not resumed
+      parameters:
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GenerationBody" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "409": { $ref: "#/components/responses/CanonicalError" }
+        "503": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/sandboxes/{id}/pause:
+    post:
+      operationId: pauseSandbox
+      tags: [sandboxes]
+      x-bootstrap-status: 501
+      summary: Live pause of the same execution/event cursor. Not stop.
+      parameters:
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GenerationBody" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "409": { $ref: "#/components/responses/CanonicalError" }
+        "422": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+        "503": { $ref: "#/components/responses/CanonicalError" }
+  /v1/sandboxes/{id}/resume:
+    post:
+      operationId: resumeSandbox
+      tags: [sandboxes]
+      x-bootstrap-status: 501
+      parameters:
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResumeBody" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "409": { $ref: "#/components/responses/CanonicalError" }
+        "422": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/sandboxes/{id}/snapshots:
+    post:
+      operationId: createSnapshot
+      tags: [sandboxes]
+      x-bootstrap-status: 501
+      summary: Optional durable snapshot, separate from live pause
+      parameters:
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GenerationBody" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "422": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/sandboxes/{id}/restore:
+    post:
+      operationId: restoreSnapshot
+      tags: [sandboxes]
+      x-bootstrap-status: 501
+      parameters:
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RestoreBody" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "422": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/sandboxes/{id}/mounts:
+    post:
+      operationId: attachMount
+      tags: [exports]
+      x-bootstrap-status: 501
+      parameters:
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MountAttach" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "403": { $ref: "#/components/responses/CanonicalError" }
+        "409": { $ref: "#/components/responses/CanonicalError" }
+        "422": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/sandboxes/{id}/mounts/{mount}:
+    delete:
+      operationId: detachMount
+      tags: [exports]
+      x-bootstrap-status: 501
+      parameters:
+        - $ref: "#/components/parameters/SandboxId"
+        - name: mount
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/OpaqueId" }
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GenerationBody" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/sandboxes/{id}/processes:
+    post:
+      operationId: spawnProcess
+      tags: [processes]
+      x-bootstrap-status: 501
+      summary: Durable guest process. Opaque process IDs; never server FDs.
+      parameters:
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProcessCreate" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "422": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/sandboxes/{id}/terminals:
+    post:
+      operationId: createTerminal
+      tags: [processes]
+      x-bootstrap-status: 501
+      summary: Guest PTY resource
+      parameters:
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TerminalCreate" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "422": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/sandboxes/{id}/channels:
+    post:
+      operationId: createChannel
+      tags: [processes]
+      x-bootstrap-status: 501
+      summary: Typed guest channel with an opaque channel ID, never a caller-selected FD
+      parameters:
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChannelCreate" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "422": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/sandboxes/{id}/fetch:
+    post:
+      operationId: guestFetch
+      tags: [sandboxes]
+      x-bootstrap-status: 501
+      summary: Guest-routed HTTP fetch; capability-gated by qualified egress
+      parameters:
+        - $ref: "#/components/parameters/SandboxId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GuestFetch" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "422": { $ref: "#/components/responses/CanonicalError" }
+        "501": { $ref: "#/components/responses/DiagnosticUnavailable" }
+  /v1/exports:
+    get:
+      operationId: listExports
+      tags: [exports]
+      x-bootstrap-status: 404
+      summary: Authorized server-host export catalog. Remote paths are never accepted.
+      responses:
+        "200":
+          description: exports
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Sandbox' }
-          description: reset complete
-        '404': { $ref: '#/components/responses/Error' }
+              schema: { $ref: "#/components/schemas/ExportList" }
+        "401": { $ref: "#/components/responses/CanonicalError" }
+        "404": { $ref: "#/components/responses/DiagnosticNotFound" }
+    post:
+      operationId: createExport
+      tags: [exports]
+      x-bootstrap-status: 404
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExportCreate" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "403": { $ref: "#/components/responses/CanonicalError" }
+        "404": { $ref: "#/components/responses/DiagnosticNotFound" }
+  /v1/operations/{id}:
+    get:
+      operationId: getOperation
+      tags: [operations]
+      x-bootstrap-status: 404
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/OpaqueId" }
+      responses:
+        "200":
+          description: operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Operation" }
+        "404": { $ref: "#/components/responses/DiagnosticNotFound" }
+  /v1/images/{id}/materialize:
+    post:
+      operationId: materializeImage
+      tags: [sandboxes]
+      x-bootstrap-status: 404
+      summary: Assigned rootfs.flatten / image-materialization extension
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/OpaqueId" }
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MaterializeImage" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "422": { $ref: "#/components/responses/CanonicalError" }
+        "404": { $ref: "#/components/responses/DiagnosticNotFound" }
+  /v1/callbacks:
+    post:
+      operationId: registerCallback
+      tags: [callbacks]
+      x-bootstrap-status: 404
+      summary: Register an opaque callback ID. The server never executes callback source.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CallbackRegister" }
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "401": { $ref: "#/components/responses/CanonicalError" }
+        "404": { $ref: "#/components/responses/DiagnosticNotFound" }
+  /v1/callbacks/{id}:
+    delete:
+      operationId: revokeCallback
+      tags: [callbacks]
+      x-bootstrap-status: 404
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/OpaqueId" }
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      responses:
+        "202": { description: operation, content: { application/json: { schema: { $ref: "#/components/schemas/Operation" } } } }
+        "404": { $ref: "#/components/responses/DiagnosticNotFound" }
 components:
+  securitySchemes:
+    MutualTLS:
+      type: mutualTLS
+      description: Remote default. TLS 1.3 with client certificates. Not implemented by the diagnostic bootstrap. Not an implicit bearer fallback. Local OS peer identity is x-local-ipc-* transport metadata, not a second HTTP security scheme.
+    BearerToken:
+      type: http
+      scheme: bearer
+      description: Separately qualified extension with issuer/audience/rotation/revocation. Not an mTLS fallback and not in the default security requirement.
   parameters:
     SandboxId:
       name: id
       in: path
       required: true
-      schema: { type: string }
-    IdempotencyKey:
+      schema: { $ref: "#/components/schemas/OpaqueId" }
+    ExecutionId:
+      name: exec
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/OpaqueId" }
+    IdempotencyKeyRequired:
       name: Idempotency-Key
       in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]{8,128}(?![\s\S])'
+      description: Required on every mutation. Replay scope is principal+method+canonical route/query+generation+body digest.
+    ExpectedGenerationHeader:
+      name: X-Sandbox-Generation
+      in: header
+      required: true
+      schema: { $ref: "#/components/schemas/Generation" }
+    GuestPath:
+      name: path
+      in: query
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 4096
+        pattern: '^/(?:(?!\.(?:\.)?(?:/|$))[^/\u0000\\]+(?:/(?!\.(?:\.)?(?:/|$))[^/\u0000\\]+)*)?/?(?![\s\S])'
+      description: Normalized guest-absolute workspace path. Never a host path. Relative paths, `//`, `.`/`..` segments, NUL, and backslash are rejected.
+    PageCursor:
+      name: cursor
+      in: query
       required: false
-      schema: { type: string, minLength: 8, maxLength: 128 }
-      description: Required on mutating ops except where noted. Same key + same body = replay. Same key + different body = 409.
+      schema: { $ref: "#/components/schemas/OpaqueId" }
   responses:
-    Error:
-      description: error
+    CanonicalError:
+      description: Planned production error envelope
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+          schema: { $ref: "#/components/schemas/CanonicalError" }
+    DiagnosticUnavailable:
+      description: Bootstrap nested diagnostic envelope for unavailable execution
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/DiagnosticError" }
+          example:
+            error:
+              code: execution_unavailable
+              message: sandbox execution is not implemented in this bootstrap
+    DiagnosticNotFound:
+      description: Bootstrap nested diagnostic envelope for unhosted routes
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/DiagnosticError" }
   schemas:
+    DecimalU64:
+      type: string
+      minLength: 1
+      maxLength: 20
+      pattern: '^(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-5])(?![\s\S])'
+      description: Canonical non-negative decimal string in the closed u64 range [0, 18446744073709551615]. The pattern encodes the inclusive maximum. Leading zeros, signs, fractions, exponents, JSON numbers, and overflow are rejected.
+    Generation:
+      type: string
+      minLength: 1
+      maxLength: 20
+      pattern: '^([1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-5])(?![\s\S])'
+      description: Canonical generation in the closed u64 range [1, 18446744073709551615]. Zero, leading zeros, and overflow are rejected. The pattern encodes the inclusive maximum.
+    OpaqueId:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: '^[A-Za-z0-9._:-]*[A-Za-z._:-][A-Za-z0-9._:-]*(?![\s\S])'
+      description: Protocol string. All-digit spellings, empty strings, and values longer than 128 bytes are rejected.
+    DiagnosticError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [execution_unavailable, payload_too_large, not_found, method_not_allowed, bad_request]
+            message: { type: string }
+    CanonicalError:
+      type: object
+      additionalProperties: false
+      required: [code, message, request_id, retryable]
+      properties:
+        code:
+          type: string
+          enum:
+            - invalid_request
+            - unauthenticated
+            - forbidden
+            - not_found
+            - conflict
+            - stale_generation
+            - idempotency_conflict
+            - limit
+            - payload_too_large
+            - cursor_expired
+            - unsupported_host
+            - unsupported_image
+            - unsupported
+            - capacity
+            - guest_failure
+            - resource_limit
+            - deadline
+            - unavailable
+            - internal
+        message: { type: string, minLength: 1, maxLength: 4096 }
+        request_id: { $ref: "#/components/schemas/OpaqueId" }
+        retryable: { type: boolean }
+        detail:
+          type: object
+          maxProperties: 8
+          propertyNames:
+            type: string
+            minLength: 1
+            maxLength: 32
+            pattern: '^[A-Za-z_][A-Za-z0-9_]*(?![\s\S])'
+          additionalProperties:
+            type: [string, boolean, "null"]
+            maxLength: 4096
+          description: Optional bounded object of validated scalars. Omitted when empty. Nested objects/arrays are rejected. Never raw interpolated JSON.
     Capabilities:
       type: object
       required: [backends, guest_abis, images, features, ceilings]
       properties:
+        api_version: { type: string }
+        contract_version: { type: string }
+        error_envelope:
+          type: string
+          enum: [diagnostic_nested, canonical]
         backends:
           type: array
-          items: { type: string, enum: [qemu] }
+          items: { type: string }
         guest_abis:
           type: array
           items: { type: string }
-          example: [zk-abi-v1]
         images:
           type: array
-          items: { $ref: '#/components/schemas/ImageMeta' }
+          items: { $ref: "#/components/schemas/ImageMeta" }
+        profiles:
+          type: array
+          items:
+            type: string
+            enum:
+              - linux-vm/x64
+              - linux-vm/arm64
+              - wasm-core-p1
+              - native/linux-x64
+              - native/macos-arm64
+              - native/windows-x64
+              - zk-abi-v1
+        providers:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderMeta" }
         features:
           type: object
+          required: [execution]
           properties:
-            network_modes: { type: array, items: { type: string, enum: [none] } }
+            execution: { type: boolean }
+            auth: { type: boolean }
+            durable_store: { type: boolean }
+            network_modes:
+              type: array
+              items: { type: string, enum: [offline, allowlist] }
             snapshots: { type: boolean }
             forks: { type: boolean }
             sse: { type: boolean }
+            pause_resume: { type: boolean }
+            pty: { type: boolean }
+            channels: { type: boolean }
+            exports: { type: boolean }
+            callbacks: { type: boolean }
+            wasm_core: { type: boolean }
+            guest_wasi: { type: boolean }
         ceilings:
-          $ref: '#/components/schemas/Limits'
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/DecimalU64" }
+    ProviderMeta:
+      type: object
+      required: [kind, qualified]
+      properties:
+        kind:
+          type: string
+          enum: [qemu-kvm, qemu-hvf, qemu-whpx]
+        qualified: { type: boolean }
+        pause_resume: { type: boolean }
+        profile: { type: string }
+        image_digest: { type: string }
+    ImagePin:
+      type: object
+      required: [id, digest]
+      additionalProperties: false
+      description: Create/input image identity. Extra inventory fields are rejected.
+      properties:
+        id: { $ref: "#/components/schemas/OpaqueId" }
+        digest:
+          type: string
+          pattern: '^sha256:[0-9a-f]{64}(?![\s\S])'
     ImageMeta:
       type: object
-      required: [id, digest, abi, created]
+      required: [id, digest]
+      additionalProperties: false
+      description: Inventory/output image record. Create requests use ImagePin, not this schema.
       properties:
-        id: { type: string, example: zig-native-v1 }
-        digest: { type: string, description: sha256 of reproducible image }
-        abi: { type: string, example: zk-abi-v1 }
+        id: { $ref: "#/components/schemas/OpaqueId" }
+        digest:
+          type: string
+          pattern: '^sha256:[0-9a-f]{64}(?![\s\S])'
+        abi: { type: string }
+        guest_arch:
+          type: string
+          enum: [x64, arm64]
         created: { type: string, format: date-time }
     Limits:
       type: object
+      additionalProperties: false
       properties:
-        vcpus: { type: integer, minimum: 1, maximum: 8, default: 1 }
-        memory_mib: { type: integer, minimum: 32, maximum: 4096, default: 128 }
-        workspace_mib: { type: integer, minimum: 8, maximum: 1024, default: 32 }
-        processes: { type: integer, minimum: 1, maximum: 64, default: 16 }
-        execution_timeout_ms: { type: integer, minimum: 1000, maximum: 600000, default: 60000 }
-        session_ttl_seconds: { type: integer, minimum: 60, maximum: 86400, default: 900 }
-        output_bytes: { type: integer, minimum: 65536, maximum: 16777216, default: 1048576 }
+        vcpus: { $ref: "#/components/schemas/DecimalU64" }
+        memory_bytes: { $ref: "#/components/schemas/DecimalU64" }
+        workspace_bytes: { $ref: "#/components/schemas/DecimalU64" }
+        processes: { $ref: "#/components/schemas/DecimalU64" }
+        execution_timeout_ms: { $ref: "#/components/schemas/DecimalU64" }
+        session_ttl_seconds: { $ref: "#/components/schemas/DecimalU64" }
+        output_bytes: { $ref: "#/components/schemas/DecimalU64" }
     NetworkPolicy:
       type: object
+      additionalProperties: false
       required: [mode]
       properties:
-        mode: { type: string, enum: [none] }
+        mode:
+          type: string
+          enum: [offline]
+    Rootfs:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [cow, ephemeral, persistent]
+        volume: { $ref: "#/components/schemas/OpaqueId" }
     SandboxCreate:
       type: object
-      required: [image]
+      additionalProperties: false
+      required: [profile, image]
+      description: Extra image inventory fields such as abi/guest_arch/created are rejected. Explicit JSON null is rejected for non-nullable properties.
       properties:
-        image: { type: string }
-        limits: { $ref: '#/components/schemas/Limits' }
-        network:
-          $ref: '#/components/schemas/NetworkPolicy'
-          default: { mode: none }
+        profile:
+          type: string
+          enum:
+            - linux-vm/x64
+            - linux-vm/arm64
+            - wasm-core-p1
+            - native/linux-x64
+            - native/macos-arm64
+            - native/windows-x64
+            - zk-abi-v1
+        image: { $ref: "#/components/schemas/ImagePin" }
+        limits: { $ref: "#/components/schemas/Limits" }
+        network: { $ref: "#/components/schemas/NetworkPolicy" }
+        rootfs: { $ref: "#/components/schemas/Rootfs" }
+    GenerationBody:
+      type: object
+      additionalProperties: false
+      required: [generation]
+      properties:
+        generation: { $ref: "#/components/schemas/Generation" }
+    ResumeBody:
+      type: object
+      additionalProperties: false
+      required: [generation, pause_fence]
+      properties:
+        generation: { $ref: "#/components/schemas/Generation" }
+        pause_fence: { $ref: "#/components/schemas/OpaqueId" }
+    RestoreBody:
+      type: object
+      additionalProperties: false
+      required: [generation, snapshot_id]
+      properties:
+        generation: { $ref: "#/components/schemas/Generation" }
+        snapshot_id: { $ref: "#/components/schemas/OpaqueId" }
     Sandbox:
       type: object
-      required: [id, image, image_digest, state, generation, limits, network, created_at, expires_at]
+      required: [id, image, image_digest, state, generation, created_at]
       properties:
-        id: { type: string }
-        image: { type: string }
+        id: { $ref: "#/components/schemas/OpaqueId" }
+        image: { $ref: "#/components/schemas/OpaqueId" }
         image_digest: { type: string }
-        state: { type: string, enum: [creating, ready, busy, resetting, expired, destroying, destroyed] }
-        generation: { type: integer, minimum: 1 }
-        limits: { $ref: '#/components/schemas/Limits' }
-        network: { $ref: '#/components/schemas/NetworkPolicy' }
+        profile: { type: string }
+        state:
+          type: string
+          enum:
+            - creating
+            - ready
+            - busy
+            - pausing
+            - paused
+            - resuming
+            - stopping
+            - stopped
+            - starting
+            - resetting
+            - recovering
+            - failed
+            - expired
+            - destroying
+            - destroyed
+        generation: { $ref: "#/components/schemas/Generation" }
+        limits: { $ref: "#/components/schemas/Limits" }
+        network: { $ref: "#/components/schemas/NetworkPolicy" }
         created_at: { type: string, format: date-time }
-        expires_at: { type: string, format: date-time }
-        usage:
-          $ref: '#/components/schemas/Usage'
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+        pause_fence:
+          type: [string, "null"]
+    SandboxList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Sandbox" }
+        next_cursor:
+          type: [string, "null"]
     ExecutionCreate:
       type: object
+      additionalProperties: false
       required: [generation, argv]
+      description: Optional properties may be omitted. Explicit JSON null is rejected because these properties are non-nullable.
       properties:
-        generation: { type: integer, minimum: 1 }
-        argv: { type: array, items: { type: string }, minItems: 1, maxItems: 64 }
-        cwd: { type: string, default: /workspace }
-        env: { type: object, additionalProperties: { type: string }, maxProperties: 64 }
-        stdin_base64: { type: string, default: '' }
-        timeout_ms: { type: integer, minimum: 100, maximum: 600000 }
+        generation: { $ref: "#/components/schemas/Generation" }
+        argv:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items:
+            type: string
+            minLength: 1
+            maxLength: 4096
+            pattern: '^[^\u0000]+(?![\s\S])'
+        cwd:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          pattern: '^/(?:(?!\.(?:\.)?(?:/|$))[^/\u0000\\]+(?:/(?!\.(?:\.)?(?:/|$))[^/\u0000\\]+)*)?/?(?![\s\S])'
+          default: /workspace
+          description: Normalized guest-absolute working directory. Omitted means /workspace. Explicit JSON null, relative paths, traversal, NUL, and backslash are rejected.
+        env:
+          type: object
+          maxProperties: 64
+          propertyNames:
+            type: string
+            minLength: 1
+            maxLength: 4096
+            pattern: '^[A-Za-z_][A-Za-z0-9_]*(?![\s\S])'
+          additionalProperties:
+            type: string
+            maxLength: 4096
+            pattern: '^[^\u0000]*(?![\s\S])'
+          description: Optional environment map. Names are POSIX-like identifiers. NUL values are rejected. Explicit JSON null is rejected.
+        timeout_ms: { $ref: "#/components/schemas/DecimalU64" }
+        stdin_base64:
+          type: string
+          maxLength: 5464
+          pattern: '^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?(?![\s\S])'
+          description: Optional standard base64 stdin. Alphabet and padding are schema-checked. Decoded length is a semantic-stage bound (max 4096 bytes). Explicit JSON null is rejected.
     Execution:
       type: object
       required: [id, sandbox_id, generation, state, argv]
       properties:
-        id: { type: string }
-        sandbox_id: { type: string }
-        generation: { type: integer }
-        state: { type: string, enum: [queued, running, cancelling, done] }
-        argv: { type: array, items: { type: string } }
-        result:
-          $ref: '#/components/schemas/ExecResult'
-        usage:
-          $ref: '#/components/schemas/Usage'
+        id: { $ref: "#/components/schemas/OpaqueId" }
+        sandbox_id: { $ref: "#/components/schemas/OpaqueId" }
+        generation: { $ref: "#/components/schemas/Generation" }
+        state:
+          type: string
+          enum: [queued, running, cancelling, done]
+        argv:
+          type: array
+          items: { type: string }
+        result: { $ref: "#/components/schemas/ExecResult" }
     ExecResult:
       type: object
       required: [terminal]
@@ -325,46 +1131,143 @@ components:
         terminal:
           type: string
           enum: [exited, cancelled, timeout, resource_limit, output_limit, guest_failure]
-        exit_code: { type: integer, nullable: true }
+        exit_code:
+          type: [integer, "null"]
         reason: { type: string }
-    Usage:
+    ProcessCreate:
       type: object
+      additionalProperties: false
+      required: [generation, argv]
       properties:
-        cpu_ms: { type: integer }
-        peak_rss_mib: { type: integer }
-        output_bytes: { type: integer }
-        wall_ms: { type: integer }
+        generation: { $ref: "#/components/schemas/Generation" }
+        argv:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items: { type: string }
+        cwd: { type: string }
+    TerminalCreate:
+      type: object
+      additionalProperties: false
+      required: [generation]
+      properties:
+        generation: { $ref: "#/components/schemas/Generation" }
+        cols: { $ref: "#/components/schemas/DecimalU64" }
+        rows: { $ref: "#/components/schemas/DecimalU64" }
+    ChannelCreate:
+      type: object
+      additionalProperties: false
+      required: [generation]
+      properties:
+        generation: { $ref: "#/components/schemas/Generation" }
+        kind:
+          type: string
+          enum: [bytes, framed]
+    GuestFetch:
+      type: object
+      additionalProperties: false
+      required: [generation, method, url]
+      properties:
+        generation: { $ref: "#/components/schemas/Generation" }
+        method: { type: string, enum: [GET, HEAD, POST, PUT, DELETE] }
+        url: { type: string, format: uri }
+    FileMeta:
+      type: object
+      required: [path, size, sha256]
+      properties:
+        path: { type: string }
+        size: { $ref: "#/components/schemas/DecimalU64" }
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}(?![\s\S])'
     EventPage:
       type: object
       required: [events, next_cursor]
       properties:
         events:
           type: array
-          items: { $ref: '#/components/schemas/Event' }
-        next_cursor: { type: integer }
+          items: { $ref: "#/components/schemas/Event" }
+        next_cursor:
+          type: [string, "null"]
     Event:
       type: object
-      required: [seq, generation, type]
+      required: [cursor, generation, type]
       properties:
-        seq: { type: integer }
-        generation: { type: integer }
-        exec_id: { type: string, nullable: true }
+        cursor: { $ref: "#/components/schemas/OpaqueId" }
+        generation: { $ref: "#/components/schemas/Generation" }
+        exec_id:
+          type: [string, "null"]
         type:
           type: string
           enum: [stdout, stderr, lifecycle, exit]
+        encoding:
+          type: string
+          enum: [utf8, base64]
         data_base64: { type: string }
-        message: { type: string }
-    FileMeta:
+        truncated: { type: boolean }
+    MountAttach:
       type: object
-      required: [path, size, sha256]
+      additionalProperties: false
+      required: [generation, export_id, target, mode]
       properties:
-        path: { type: string }
-        size: { type: integer }
-        sha256: { type: string }
-    Error:
+        generation: { $ref: "#/components/schemas/Generation" }
+        export_id: { $ref: "#/components/schemas/OpaqueId" }
+        target:
+          type: string
+          pattern: '^/(?:(?!\.(?:\.)?(?:/|$))[^/\u0000\\]+(?:/(?!\.(?:\.)?(?:/|$))[^/\u0000\\]+)*)?/?(?![\s\S])'
+        mode:
+          type: string
+          enum: [ro, rw]
+    ExportCreate:
       type: object
-      required: [code, message]
+      additionalProperties: false
+      required: [mode]
       properties:
-        code: { type: string }
-        message: { type: string }
-        detail: { type: object }
+        mode:
+          type: string
+          enum: [ro, rw]
+        principal: { $ref: "#/components/schemas/OpaqueId" }
+        description: Never a remote client filesystem path. Server broker uses an already-open directory FD.
+    ExportList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, mode]
+            properties:
+              id: { $ref: "#/components/schemas/OpaqueId" }
+              mode: { type: string, enum: [ro, rw] }
+    MaterializeImage:
+      type: object
+      additionalProperties: false
+      required: [sandbox_id, generation]
+      properties:
+        sandbox_id: { $ref: "#/components/schemas/OpaqueId" }
+        generation: { $ref: "#/components/schemas/Generation" }
+    CallbackRegister:
+      type: object
+      additionalProperties: false
+      required: [sandbox_id, kind]
+      properties:
+        sandbox_id: { $ref: "#/components/schemas/OpaqueId" }
+        kind:
+          type: string
+          enum: [virtual_fs, network_policy]
+        deadline_ms: { $ref: "#/components/schemas/DecimalU64" }
+        max_bytes: { $ref: "#/components/schemas/DecimalU64" }
+    Operation:
+      type: object
+      required: [id, kind, state]
+      properties:
+        id: { $ref: "#/components/schemas/OpaqueId" }
+        kind: { type: string }
+        state:
+          type: string
+          enum: [accepted, in_progress, succeeded, failed, cancelled]
+        sandbox_id:
+          type: [string, "null"]
+        location: { type: string }
+        error: { $ref: "#/components/schemas/CanonicalError" }

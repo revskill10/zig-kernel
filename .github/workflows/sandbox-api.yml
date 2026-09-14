@@ -1,0 +1,84 @@
+# Hosted diagnostic API, Linux listener, pinned schema, and process/container
+# probes. Not an execution, auth, isolation, native-boot, or QEMU/OVMF gate.
+# Existing native-bootstrap.yml, qemu-test.yml, and release.yml are unchanged.
+name: Sandbox diagnostic API
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+permissions:
+  contents: read
+
+jobs:
+  hosted-api-schema-process:
+    name: Hosted API, schema, Linux process
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Zig 0.16.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Hosted sandbox tests and Linux listener
+        run: zig build test-sandbox sandbox-api -Doptimize=ReleaseSafe --summary all
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pinned schema and OpenAPI fixtures
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONNOUSERSITE: "1"
+        run: |
+          python -m venv .tmp/schema-venv
+          .tmp/schema-venv/bin/pip install --no-cache-dir -r tests/contract/schema-pins.txt
+          .tmp/schema-venv/bin/python -B scripts/sandbox-schema-validate.py
+
+      - name: Built-process probe
+        env:
+          SANDBOX_PROBE_BIN: ${{ github.workspace }}/zig-out/bin/zig-sandbox
+        run: bash scripts/sandbox-probe.sh
+
+  docker-liveness:
+    name: Docker diagnostic image smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Linux/amd64 diagnostic image
+        run: docker build --platform linux/amd64 -t zig-sandbox-bootstrap:ci .
+
+      - name: Unprivileged loopback smoke
+        run: |
+          set -euo pipefail
+          docker run -d --name zig-sandbox-ci --platform linux/amd64 \
+            -p 127.0.0.1:18080:8080 zig-sandbox-bootstrap:ci
+          cleanup() { docker rm -f zig-sandbox-ci >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            code=$(curl -sS -m 1 -o /dev/null -w "%{http_code}" http://127.0.0.1:18080/healthz || true)
+            if [ "$code" = "200" ]; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          test "$(curl -sS -m 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:18080/healthz)" = "200"
+          test "$(curl -sS -m 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:18080/readyz)" = "503"
+          curl -sS -m 5 http://127.0.0.1:18080/v1/capabilities | grep -F '"execution":false'
+          test "$(curl -sS -m 5 -o /dev/null -w "%{http_code}" -X POST --data '{"image":"example"}' http://127.0.0.1:18080/v1/sandboxes)" = "501"
+          test "$(curl -sS -m 5 -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:18080/v1/sandboxes/s1/resume)" = "501"
+          user=$(docker inspect -f '{{.Config.User}}' zig-sandbox-ci)
+          test "$user" = "sandbox:sandbox"
+          echo "docker smoke ok user=$user (liveness only; not execution ready)"

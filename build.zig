@@ -525,4 +525,99 @@ pub fn build(b: *std.Build) void {
     });
     const qualify_test_step = b.step("test-native-qualification", "Run native qualifier regression tests");
     qualify_test_step.dependOn(&qualify_tests.step);
+
+    // Deliberately fail-closed Linux HTTP bootstrap.  It exposes liveness,
+    // readiness, and capability truth only; it never runs guest code.
+    const api_target = b.resolveTargetQuery(.{
+        .cpu_arch = .x86_64,
+        .os_tag = .linux,
+        .abi = .musl,
+    });
+    // Hosted named modules so fixture tests, bootstrap, and engine share one
+    // contract type identity. Relative @import of files outside a module root
+    // is rejected by Zig 0.16.
+    const contract_mod = b.createModule(.{
+        .root_source_file = b.path("supervisor/contract.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    const bootstrap_mod = b.createModule(.{
+        .root_source_file = b.path("supervisor/bootstrap.zig"),
+        .target = host_target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sandbox_contract", .module = contract_mod },
+        },
+    });
+    const engine_mod = b.createModule(.{
+        .root_source_file = b.path("engine/contracts.zig"),
+        .target = host_target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sandbox_contract", .module = contract_mod },
+        },
+    });
+
+    const api_contract_mod = b.createModule(.{
+        .root_source_file = b.path("supervisor/contract.zig"),
+        .target = api_target,
+        .optimize = optimize,
+    });
+    const api_mod = b.createModule(.{
+        .root_source_file = b.path("supervisor/bootstrap_main.zig"),
+        .target = api_target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sandbox_contract", .module = api_contract_mod },
+        },
+    });
+    const api_exe = b.addExecutable(.{
+        .name = "zig-sandbox",
+        .root_module = api_mod,
+    });
+    const api_step = b.step("sandbox-api", "Build fail-closed Linux sandbox API bootstrap");
+    api_step.dependOn(&b.addInstallArtifact(api_exe, .{}).step);
+
+    const bootstrap_tests = b.addTest(.{ .root_module = bootstrap_mod });
+    const bootstrap_test_step = b.step("test-bootstrap", "Run fail-closed API contract tests");
+    bootstrap_test_step.dependOn(&b.addRunArtifact(bootstrap_tests).step);
+
+    const engine_tests = b.addTest(.{ .root_module = engine_mod });
+    const engine_test_step = b.step("test-engine", "Run unavailable subsystem seam tests");
+    engine_test_step.dependOn(&b.addRunArtifact(engine_tests).step);
+
+    // Zig 0.16 forbids @embedFile outside a module package root. Copy the
+    // OpenAPI document into a generated module whose root contains it so
+    // contract tests keep the MutualTLS / identity-header assertions.
+    const openapi_wf = b.addWriteFiles();
+    _ = openapi_wf.addCopyFile(b.path("docs/sandbox-api.openapi.yaml"), "sandbox-api.openapi.yaml");
+    const openapi_embed = openapi_wf.add(
+        "openapi_embed.zig",
+        \\pub const spec: []const u8 = @embedFile("sandbox-api.openapi.yaml");
+        \\
+        ,
+    );
+    const openapi_mod = b.createModule(.{
+        .root_source_file = openapi_embed,
+    });
+
+    const contract_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/contract/root.zig"),
+        .target = host_target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sandbox_contract", .module = contract_mod },
+            .{ .name = "sandbox_bootstrap", .module = bootstrap_mod },
+            .{ .name = "sandbox_engine", .module = engine_mod },
+            .{ .name = "openapi_spec", .module = openapi_mod },
+        },
+    }) });
+    const contract_test_step = b.step("test-contract", "Run independent sandbox API contract fixtures");
+    contract_test_step.dependOn(&b.addRunArtifact(contract_tests).step);
+
+    const sandbox_test_step = b.step("test-sandbox", "Run supervisor, bootstrap, engine, and contract tests");
+    sandbox_test_step.dependOn(sup_test_step);
+    sandbox_test_step.dependOn(bootstrap_test_step);
+    sandbox_test_step.dependOn(engine_test_step);
+    sandbox_test_step.dependOn(contract_test_step);
 }

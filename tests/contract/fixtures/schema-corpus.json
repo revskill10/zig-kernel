@@ -1,0 +1,517 @@
+{
+  "description": "Shared accepted/rejected fixture corpus for standalone JSON Schema, OpenAPI component schemas, and the semantic stage. Combined acceptance is schema AND semantic. A structural schema rejection already rejects the request; semantic may be not_applicable. Duplicate-key and malformed-JSON cases remain Zig parser tests. This file contains JSON values, not an acceptlist of fixture ids.",
+  "cases": [
+    {
+      "id": "decimal-0",
+      "schema": "decimal-u64",
+      "value": "0",
+      "expect": "accept"
+    },
+    {
+      "id": "decimal-1",
+      "schema": "decimal-u64",
+      "value": "1",
+      "expect": "accept"
+    },
+    {
+      "id": "decimal-18-nines",
+      "schema": "decimal-u64",
+      "value": "999999999999999999",
+      "expect": "accept"
+    },
+    {
+      "id": "decimal-19-nines",
+      "schema": "decimal-u64",
+      "value": "9999999999999999999",
+      "expect": "accept"
+    },
+    {
+      "id": "decimal-20-digit-1e19",
+      "schema": "decimal-u64",
+      "value": "10000000000000000000",
+      "expect": "accept"
+    },
+    {
+      "id": "decimal-js-unsafe",
+      "schema": "decimal-u64",
+      "value": "9007199254740993",
+      "expect": "accept"
+    },
+    {
+      "id": "decimal-u64-max",
+      "schema": "decimal-u64",
+      "value": "18446744073709551615",
+      "expect": "accept"
+    },
+    {
+      "id": "decimal-u64-max-plus-one",
+      "schema": "decimal-u64",
+      "value": "18446744073709551616",
+      "expect": "reject"
+    },
+    {
+      "id": "decimal-20-digit-1899",
+      "schema": "decimal-u64",
+      "value": "18999999999999999999",
+      "expect": "reject"
+    },
+    {
+      "id": "decimal-20-nines",
+      "schema": "decimal-u64",
+      "value": "99999999999999999999",
+      "expect": "reject"
+    },
+    {
+      "id": "decimal-21-digit",
+      "schema": "decimal-u64",
+      "value": "184467440737095516150",
+      "expect": "reject"
+    },
+    {
+      "id": "decimal-leading-zero",
+      "schema": "decimal-u64",
+      "value": "01",
+      "expect": "reject"
+    },
+    {
+      "id": "decimal-sign",
+      "schema": "decimal-u64",
+      "value": "-1",
+      "expect": "reject"
+    },
+    {
+      "id": "decimal-exponent",
+      "schema": "decimal-u64",
+      "value": "1e2",
+      "expect": "reject"
+    },
+    {
+      "id": "decimal-number-type",
+      "schema": "decimal-u64",
+      "value": 1,
+      "expect": "reject"
+    },
+    {
+      "id": "decimal-null",
+      "schema": "decimal-u64",
+      "value": null,
+      "expect": "reject"
+    },
+    {
+      "id": "generation-1",
+      "schema": "generation",
+      "value": "1",
+      "expect": "accept"
+    },
+    {
+      "id": "generation-max",
+      "schema": "generation",
+      "value": "18446744073709551615",
+      "expect": "accept"
+    },
+    {
+      "id": "generation-zero",
+      "schema": "generation",
+      "value": "0",
+      "expect": "reject"
+    },
+    {
+      "id": "generation-max-plus-one",
+      "schema": "generation",
+      "value": "18446744073709551616",
+      "expect": "reject"
+    },
+    {
+      "id": "opaque-id-sbx",
+      "schema": "opaque-id",
+      "value": "sbx_1",
+      "expect": "accept"
+    },
+    {
+      "id": "opaque-id-req",
+      "schema": "opaque-id",
+      "value": "req_test1",
+      "expect": "accept"
+    },
+    {
+      "id": "opaque-id-colon",
+      "schema": "opaque-id",
+      "value": "evt:01HABC",
+      "expect": "accept"
+    },
+    {
+      "id": "opaque-id-all-digits",
+      "schema": "opaque-id",
+      "value": "12345",
+      "expect": "reject"
+    },
+    {
+      "id": "opaque-id-empty",
+      "schema": "opaque-id",
+      "value": "",
+      "expect": "reject"
+    },
+    {
+      "id": "opaque-id-space",
+      "schema": "opaque-id",
+      "value": "bad id",
+      "expect": "reject"
+    },
+    {
+      "id": "opaque-id-null",
+      "schema": "opaque-id",
+      "value": null,
+      "expect": "reject"
+    },
+    {
+      "id": "error-canonical-unsupported",
+      "schema": "error-canonical",
+      "file": "error.canonical.unsupported.json",
+      "expect": "accept"
+    },
+    {
+      "id": "error-canonical-with-detail",
+      "schema": "error-canonical",
+      "file": "error.canonical.with_detail.json",
+      "expect": "accept"
+    },
+    {
+      "id": "error-canonical-numeric-request-id",
+      "schema": "error-canonical",
+      "value": {
+        "code": "unsupported",
+        "message": "the selected Linux VM provider is not available",
+        "request_id": "12345",
+        "retryable": false
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "error-canonical-null-request-id",
+      "schema": "error-canonical",
+      "value": {
+        "code": "unsupported",
+        "message": "the selected Linux VM provider is not available",
+        "request_id": null,
+        "retryable": false
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "error-canonical-missing-request-id",
+      "schema": "error-canonical",
+      "value": {
+        "code": "unsupported",
+        "message": "the selected Linux VM provider is not available",
+        "retryable": false
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "error-canonical-nested-detail",
+      "schema": "error-canonical",
+      "value": {
+        "code": "invalid_request",
+        "message": "invalid field",
+        "request_id": "req_detail1",
+        "retryable": false,
+        "detail": { "field": { "nested": true } }
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "sandbox-create-valid",
+      "schema": "sandbox-create",
+      "file": "sandbox_create.valid.json",
+      "expect": "accept"
+    },
+    {
+      "id": "sandbox-create-image-abi",
+      "schema": "sandbox-create",
+      "file": "sandbox_create.image_abi.json",
+      "expect": "reject"
+    },
+    {
+      "id": "sandbox-create-unknown-owner",
+      "schema": "sandbox-create",
+      "file": "sandbox_create.unknown_owner.json",
+      "expect": "reject"
+    },
+    {
+      "id": "sandbox-create-image-null",
+      "schema": "sandbox-create",
+      "value": {
+        "profile": "linux-vm/x64",
+        "image": null
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "sandbox-create-limits-null",
+      "schema": "sandbox-create",
+      "value": {
+        "profile": "linux-vm/x64",
+        "image": {
+          "id": "linux-dev-v1",
+          "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        },
+        "limits": null
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "sandbox-create-vcpus-number",
+      "schema": "sandbox-create",
+      "value": {
+        "profile": "linux-vm/x64",
+        "image": {
+          "id": "linux-dev-v1",
+          "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        },
+        "limits": { "vcpus": 1 }
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "execution-create-ok-stdin",
+      "schema": "execution-create",
+      "file": "execution_create.stdin_base64.ok.json",
+      "expect": "accept"
+    },
+    {
+      "id": "execution-create-unicode-argv",
+      "schema": "execution-create",
+      "file": "execution_create.unicode_argv.json",
+      "expect": "accept"
+    },
+    {
+      "id": "execution-create-absent-optional",
+      "schema": "execution-create",
+      "value": {
+        "generation": "1",
+        "argv": ["/bin/true"]
+      },
+      "expect": "accept"
+    },
+    {
+      "id": "execution-create-cwd-null",
+      "schema": "execution-create",
+      "file": "execution_create.cwd_null.json",
+      "expect": "reject"
+    },
+    {
+      "id": "execution-create-stdin-null",
+      "schema": "execution-create",
+      "file": "execution_create.stdin_null.json",
+      "expect": "reject"
+    },
+    {
+      "id": "execution-create-timeout-null",
+      "schema": "execution-create",
+      "file": "execution_create.timeout_null.json",
+      "expect": "reject"
+    },
+    {
+      "id": "execution-create-generation-number",
+      "schema": "execution-create",
+      "file": "execution_create.numeric_generation.json",
+      "expect": "reject"
+    },
+    {
+      "id": "execution-create-stdin-number",
+      "schema": "execution-create",
+      "file": "execution_create.stdin_base64.number.json",
+      "expect": "reject"
+    },
+    {
+      "id": "diagnostic-error",
+      "schema": "error-diagnostic",
+      "file": "error.diagnostic.execution_unavailable.json",
+      "expect": "accept"
+    },
+    {
+      "id": "diagnostic-capabilities",
+      "schema": "capabilities-diagnostic",
+      "file": "capabilities.diagnostic.json",
+      "expect": "accept"
+    },
+    {
+      "id": "decimal-lf",
+      "schema": "decimal-u64",
+      "value": "0\n",
+      "expect": "reject"
+    },
+    {
+      "id": "decimal-crlf",
+      "schema": "decimal-u64",
+      "value": "1\r\n",
+      "expect": "reject"
+    },
+    {
+      "id": "decimal-embedded-space",
+      "schema": "decimal-u64",
+      "value": "1 0",
+      "expect": "reject"
+    },
+    {
+      "id": "decimal-trailing-tab",
+      "schema": "decimal-u64",
+      "value": "1\t",
+      "expect": "reject"
+    },
+    {
+      "id": "generation-lf",
+      "schema": "generation",
+      "value": "1\n",
+      "expect": "reject"
+    },
+    {
+      "id": "generation-crlf",
+      "schema": "generation",
+      "value": "1\r\n",
+      "expect": "reject"
+    },
+    {
+      "id": "generation-embedded-space",
+      "schema": "generation",
+      "value": "1 2",
+      "expect": "reject"
+    },
+    {
+      "id": "opaque-id-lf",
+      "schema": "opaque-id",
+      "value": "sbx_1\n",
+      "expect": "reject"
+    },
+    {
+      "id": "opaque-id-crlf",
+      "schema": "opaque-id",
+      "value": "sbx_1\r\n",
+      "expect": "reject"
+    },
+    {
+      "id": "opaque-id-embedded-tab",
+      "schema": "opaque-id",
+      "value": "sbx\t1",
+      "expect": "reject"
+    },
+    {
+      "id": "sandbox-create-digest-lf",
+      "schema": "sandbox-create",
+      "value": {
+        "profile": "linux-vm/x64",
+        "image": {
+          "id": "linux-dev-v1",
+          "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+        }
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "sandbox-create-digest-crlf",
+      "schema": "sandbox-create",
+      "value": {
+        "profile": "linux-vm/x64",
+        "image": {
+          "id": "linux-dev-v1",
+          "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\r\n"
+        }
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "sandbox-create-digest-embedded-space",
+      "schema": "sandbox-create",
+      "value": {
+        "profile": "linux-vm/x64",
+        "image": {
+          "id": "linux-dev-v1",
+          "digest": "sha256:0123456789abcdef 123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "sandbox-create-id-lf",
+      "schema": "sandbox-create",
+      "value": {
+        "profile": "linux-vm/x64",
+        "image": {
+          "id": "linux-dev-v1\n",
+          "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      },
+      "expect": "reject"
+    },
+    {
+      "id": "execution-create-stdin-invalid-base64",
+      "schema": "execution-create",
+      "file": "execution_create.stdin_base64.invalid.json",
+      "expect": "reject"
+    },
+    {
+      "id": "execution-create-cwd-relative",
+      "schema": "execution-create",
+      "file": "execution_create.cwd_relative.json",
+      "expect": "reject"
+    },
+    {
+      "id": "execution-create-cwd-traversal",
+      "schema": "execution-create",
+      "file": "execution_create.cwd_traversal.json",
+      "expect": "reject"
+    },
+    {
+      "id": "execution-create-argv-nul",
+      "schema": "execution-create",
+      "file": "execution_create.argv_nul.json",
+      "expect": "reject"
+    },
+    {
+      "id": "execution-create-env-invalid-key",
+      "schema": "execution-create",
+      "file": "execution_create.env_invalid_key.json",
+      "expect": "reject"
+    },
+    {
+      "id": "execution-create-env-nul-value",
+      "schema": "execution-create",
+      "file": "execution_create.env_nul_value.json",
+      "expect": "reject"
+    },
+    {
+      "id": "execution-create-env-ok",
+      "schema": "execution-create",
+      "file": "execution_create.env_ok.json",
+      "expect": "accept"
+    },
+    {
+      "id": "execution-create-argv-utf8-bytes-max",
+      "schema": "execution-create",
+      "file": "execution_create.argv_utf8_bytes_max.json",
+      "expect_schema": "accept",
+      "expect_semantic": "accept"
+    },
+    {
+      "id": "execution-create-argv-utf8-bytes-over",
+      "schema": "execution-create",
+      "file": "execution_create.argv_utf8_bytes_over.json",
+      "expect_schema": "accept",
+      "expect_semantic": "reject"
+    },
+    {
+      "id": "execution-create-stdin-decoded-max",
+      "schema": "execution-create",
+      "file": "execution_create.stdin_decoded_max.json",
+      "expect_schema": "accept",
+      "expect_semantic": "accept"
+    },
+    {
+      "id": "execution-create-stdin-decoded-over",
+      "schema": "execution-create",
+      "file": "execution_create.stdin_decoded_over.json",
+      "expect_schema": "accept",
+      "expect_semantic": "reject"
+    }
+  ]
+}
