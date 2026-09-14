@@ -25,6 +25,7 @@ const EXIT_PMM: u32 = 0x13;
 const EXIT_TRAP: u32 = 0x14;
 const EXIT_TIMER: u32 = 0x15;
 const EXIT_PAGING: u32 = 0x16;
+pub const EXIT_VM: u32 = 0x17; // QEMU reports (code<<1)|1 = 0x2F = host 47
 const EXIT_PANIC: u32 = 0x3F;
 
 const TRAP_ITERS: u64 = 64;
@@ -177,7 +178,15 @@ export fn kmain(info: *boot_info.BootInfo) callconv(.{ .x86_64_sysv = .{} }) nor
 
     if (n6Negative()) runNegativeUd2();
     runTrapCorpus();
+    maybeRunVmProbe();
     finishBoot();
+}
+
+fn maybeRunVmProbe() void {
+    const root = @import("root");
+    if (comptime @hasDecl(root, "runVmProbe")) {
+        root.runVmProbe(@ptrCast(info_g));
+    }
 }
 
 fn runNegativeUd2() noreturn {
