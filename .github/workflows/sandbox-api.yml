@@ -30,7 +30,7 @@ jobs:
       - name: SQLite dependency tests and linux-musl probe
         run: timeout 900 zig build test-store-dependency store-dependency-probe -Doptimize=ReleaseSafe --summary all
 
-      - name: Hosted seed/reopen probe and :memory: reject
+      - name: "Hosted seed/reopen probe and :memory: reject"
         run: |
           set -euo pipefail
           PROBE="${GITHUB_WORKSPACE}/zig-out/bin/store-dependency-probe"
