@@ -377,6 +377,70 @@ pub fn build(b: *std.Build) void {
     user_parsers_step.dependOn(&run_newc.step);
     user_parsers_step.dependOn(&run_user_elf.step);
 
+    // KWP3a.2a: hosted user VM construction/teardown and PMM adapter.
+    // Not imported by the default native kernel.
+    const h_user_vm = b.createModule(.{
+        .root_source_file = b.path("src/arch/x86_64/native/user_vm.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    h_user_vm.addImport("user_elf", h_user_elf);
+    const vm_check = b.createModule(.{
+        .root_source_file = b.path("tests/native-user/vm_check.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    vm_check.addImport("user_vm", h_user_vm);
+    vm_check.addImport("user_elf", h_user_elf);
+    const run_vm_check = b.addRunArtifact(b.addTest(.{ .root_module = vm_check }));
+
+    const h_user_vm_pmm = b.createModule(.{
+        .root_source_file = b.path("src/arch/x86_64/native/user_vm_pmm.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    h_user_vm_pmm.addImport("pmm", h_pmm);
+    const vm_pmm_check = b.createModule(.{
+        .root_source_file = b.path("tests/native-user/vm_pmm_check.zig"),
+        .target = host_target,
+        .optimize = optimize,
+    });
+    vm_pmm_check.addImport("user_vm_pmm", h_user_vm_pmm);
+    vm_pmm_check.addImport("pmm", h_pmm);
+    vm_pmm_check.addImport("boot_info", h_boot_info);
+    vm_pmm_check.addImport("user_vm", h_user_vm);
+    vm_pmm_check.addImport("user_elf", h_user_elf);
+    const run_vm_pmm_check = b.addRunArtifact(b.addTest(.{ .root_module = vm_pmm_check }));
+
+    const n_user_elf = mkNativeMod(b, "src/arch/x86_64/native/user_elf.zig", native_target, native_optimize);
+    const n_user_vm = mkNativeMod(b, "src/arch/x86_64/native/user_vm.zig", native_target, native_optimize);
+    n_user_vm.addImport("user_elf", n_user_elf);
+    const n_user_vm_pmm = mkNativeMod(b, "src/arch/x86_64/native/user_vm_pmm.zig", native_target, native_optimize);
+    n_user_vm_pmm.addImport("pmm", n_pmm);
+    const native_vm_compile_mod = mkNativeMod(b, "tests/native-user/vm_native_compile.zig", native_target, native_optimize);
+    native_vm_compile_mod.addImport("user_vm", n_user_vm);
+    native_vm_compile_mod.addImport("user_vm_pmm", n_user_vm_pmm);
+    native_vm_compile_mod.addImport("paging", n_paging);
+    native_vm_compile_mod.addImport("pmm", n_pmm);
+    native_vm_compile_mod.addImport("boot_info", n_boot_info);
+    const native_vm_compile_obj = b.addObject(.{
+        .name = "user-vm-native-compile",
+        .root_module = native_vm_compile_mod,
+        .use_llvm = true,
+    });
+    const native_vm_compile_install = b.addInstallFile(
+        native_vm_compile_obj.getEmittedBin(),
+        "native/user-vm-native-compile.o",
+    );
+
+    const vm_step = b.step("test-native-user-vm", "Run hosted user VM construction fixtures");
+    vm_step.dependOn(&run_vm_check.step);
+    vm_step.dependOn(&run_vm_pmm_check.step);
+    vm_step.dependOn(&native_vm_compile_install.step);
+    native_test_step.dependOn(&run_vm_check.step);
+    native_test_step.dependOn(&run_vm_pmm_check.step);
+    native_test_step.dependOn(&native_vm_compile_install.step);
+
     // Host tools: initramfs builder + FAT16 ESP image builder.
     const mkinitramfs_mod = b.createModule(.{
         .root_source_file = b.path("tools/mkinitramfs.zig"),

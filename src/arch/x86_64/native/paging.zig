@@ -18,8 +18,15 @@ pub const PF_PROBE_ADDR: u64 = MAP_TOP + 16 * 1024 * 1024;
 
 const PRESENT: u64 = 1 << 0;
 const WRITE: u64 = 1 << 1;
+const USER: u64 = 1 << 2;
 const HUGE_BIT: u64 = 1 << 7;
 const NX: u64 = 1 << 63;
+
+/// Physical-address field of a 4 KiB table/leaf entry. Independent of flags.
+pub const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
+/// Hardware accessed/dirty. Later probes may set these; they are not software
+/// mutations of the supervisor address or permission bits.
+pub const AD_MASK: u64 = (1 << 5) | (1 << 6);
 
 var pml4: [512]u64 align(4096) = [_]u64{0} ** 512;
 var pdpt: [512]u64 align(4096) = [_]u64{0} ** 512;
@@ -118,4 +125,79 @@ fn invlpg(addr: u64) void {
         : [a] "r" (addr),
         : .{ .memory = true }
     );
+}
+
+/// Immutable snapshot of the initialized supervisor root and the borrowed
+/// low PDPT entry. Not a pointer into the live tables: callers must not
+/// mutate kernel mappings through this value. Hardware A/D bits in
+/// `pdpt0_entry` are distinct from address/permission bits; compare with
+/// `addrPerm` when checking for forbidden software mutations.
+pub const KernelTemplate = struct {
+    root_phys: u64,
+    pdpt0_entry: u64,
+
+    pub fn pdpt0AddrPerm(self: KernelTemplate) u64 {
+        return self.pdpt0_entry & ~AD_MASK;
+    }
+};
+
+pub const TemplateError = error{
+    NotInitialized,
+    Pml4NotPresent,
+    Pml4User,
+    Pml4Huge,
+    Pml4Unaligned,
+    Pml4Zero,
+    Pml4OutOfDomain,
+    Pml4NotCurrent,
+    Pdpt0NotPresent,
+    Pdpt0User,
+    Pdpt0Huge,
+    Pdpt0Unaligned,
+    Pdpt0Zero,
+    Pdpt0OutOfDomain,
+    Pdpt0NotCurrent,
+};
+
+/// Validated read-only view of the current kernel mappings.
+///
+/// Precondition: `init` has completed on this single CPU with no concurrent
+/// map changes. Uninitialized tables are recognized from the BSS-zero
+/// presence bits plus the expected software identities of `pdpt`/`pd`.
+/// This does not read hardware CR3 and does not prove that the CPU is
+/// currently using this root.
+pub fn kernelTemplate() TemplateError!KernelTemplate {
+    const root = phys([512]u64, &pml4);
+    const e4 = pml4[0];
+    if (e4 & PRESENT == 0) return error.NotInitialized;
+
+    if (e4 & USER != 0) return error.Pml4User;
+    if (e4 & HUGE_BIT != 0) return error.Pml4Huge;
+    const pdpt_phys = e4 & ADDR_MASK;
+    if (pdpt_phys == 0) return error.Pml4Zero;
+    if (pdpt_phys % PAGE != 0) return error.Pml4Unaligned;
+    if (pdpt_phys >= MAP_TOP) return error.Pml4OutOfDomain;
+    if (pdpt_phys != phys([512]u64, &pdpt)) return error.Pml4NotCurrent;
+
+    const e3 = pdpt[0];
+    if (e3 & PRESENT == 0) return error.Pdpt0NotPresent;
+    if (e3 & USER != 0) return error.Pdpt0User;
+    if (e3 & HUGE_BIT != 0) return error.Pdpt0Huge;
+    const pd_phys = e3 & ADDR_MASK;
+    if (pd_phys == 0) return error.Pdpt0Zero;
+    if (pd_phys % PAGE != 0) return error.Pdpt0Unaligned;
+    if (pd_phys >= MAP_TOP) return error.Pdpt0OutOfDomain;
+    if (pd_phys != phys([512]u64, &pd)) return error.Pdpt0NotCurrent;
+
+    return .{
+        .root_phys = root,
+        .pdpt0_entry = e3,
+    };
+}
+
+/// Address and permission bits of an entry with A/D cleared. Use this when
+/// distinguishing hardware accessed/dirty updates from forbidden software
+/// changes to the supervisor subtree.
+pub fn addrPerm(entry: u64) u64 {
+    return entry & ~AD_MASK;
 }
