@@ -167,30 +167,30 @@ fn removeVma(idx: usize) void {
 }
 
 pub fn mmap(addr: usize, len: usize, prot: u32, flags: u32) ?usize {
-    const aligned_len = (len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-    var map_addr: usize = addr;
+    if (len == 0) return null;
+    const rounded_len = std.math.add(usize, len, PAGE_SIZE - 1) catch return null;
+    const aligned_len = rounded_len & ~(PAGE_SIZE - 1);
+    if (aligned_len == 0) return null;
 
-    if (map_addr == 0 or (flags & MAP_FIXED) != 0) {
-        // Need to allocate a new address
-        if (map_addr == 0) {
-            // Try to find a free region
-            map_addr = next_anon_addr;
-            next_anon_addr += aligned_len + (PAGE_SIZE * 256); // Leave some gap
-        }
-        // Check for overlap
-        if (findVmaOverlap(map_addr, map_addr + aligned_len) != null) {
-            return null;
-        }
+    var map_addr = addr;
+    var next_anon: ?usize = null;
+    if (map_addr == 0) {
+        map_addr = next_anon_addr;
+        const span = std.math.add(usize, aligned_len, PAGE_SIZE * 256) catch return null;
+        next_anon = std.math.add(usize, map_addr, span) catch return null;
     }
+    const map_end = std.math.add(usize, map_addr, aligned_len) catch return null;
+    if (findVmaOverlap(map_addr, map_end) != null) return null;
 
     const slot = findFreeVmaSlot() orelse return null;
     vm_areas[slot] = VmArea{
         .start = map_addr,
-        .end = map_addr + aligned_len,
+        .end = map_end,
         .flags = flags,
         .prot = prot,
         .is_shared = (flags & MAP_SHARED) != 0,
     };
+    if (next_anon) |next| next_anon_addr = next;
     vm_area_count += 1;
 
     // Allocate physical pages for anonymous mapping
@@ -208,7 +208,10 @@ pub fn mmap(addr: usize, len: usize, prot: u32, flags: u32) ?usize {
 }
 
 pub fn munmap(addr: usize, len: usize) i32 {
-    const end = addr + ((len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
+    if (len == 0) return -1;
+    const rounded_len = std.math.add(usize, len, PAGE_SIZE - 1) catch return -1;
+    const aligned_len = rounded_len & ~(PAGE_SIZE - 1);
+    const end = std.math.add(usize, addr, aligned_len) catch return -1;
     var i: usize = 0;
     var removed: usize = 0;
     while (i < MAX_VM_AREAS) : (i += 1) {
@@ -229,7 +232,8 @@ pub fn munmap(addr: usize, len: usize) i32 {
 }
 
 pub fn mprotect(addr: usize, len: usize, prot: u32) i32 {
-    const end = addr + len;
+    if (len == 0) return -1;
+    const end = std.math.add(usize, addr, len) catch return -1;
     for (&vm_areas, 0..) |*slot, i| {
         if (slot.*) |*vma| {
             if (vma.start <= addr and vma.end >= end) {
@@ -258,7 +262,8 @@ pub fn vmaCount() usize { return vm_area_count; }
 /// Mark overlapping MAP_PRIVATE VMAs copy-on-write (fork analog: parent + child
 /// share, write fault copies). Returns number of VMAs marked.
 pub fn markCowRange(addr: usize, len: usize) usize {
-    const end = addr + len;
+    if (len == 0) return 0;
+    const end = std.math.add(usize, addr, len) catch return 0;
     var n: usize = 0;
     for (&vm_areas) |*slot| {
         if (slot.*) |*vma| {

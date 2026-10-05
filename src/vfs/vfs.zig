@@ -89,6 +89,8 @@ var dentry_used: [MAX_DENTRIES]bool = [_]bool{false} ** MAX_DENTRIES;
 var inode_next: u32 = 1;
 var root_dentry: ?*Dentry = null;
 var mounts: [MAX_MOUNTS]MountEntry = [_]MountEntry{.{}} ** MAX_MOUNTS;
+var mount_target_storage: [MAX_MOUNTS][512]u8 = [_][512]u8{[_]u8{0} ** 512} ** MAX_MOUNTS;
+var mount_type_storage: [MAX_MOUNTS][128]u8 = [_][128]u8{[_]u8{0} ** 128} ** MAX_MOUNTS;
 var mount_count: usize = 0;
 
 // M5 isolated workspaces: jail root + FS quota.
@@ -124,6 +126,8 @@ pub fn init() void {
     for (&dentries) |*d| d.* = .{};
     for (&open_files) |*f| f.* = .{};
     for (&mounts) |*m| m.* = .{};
+    for (&mount_target_storage) |*storage| @memset(storage[0..], 0);
+    for (&mount_type_storage) |*storage| @memset(storage[0..], 0);
     inode_next = 1;
     root_dentry = null;
     dev_count = 0;
@@ -136,9 +140,11 @@ pub fn init() void {
     root_dentry.?.setName("/");
     root_dentry.?.inode = root_inode;
     _ = createFile("/hello.txt", "Hello from Zig Linux VFS (ramfs)\n");
+    _ = mkdiratImpl(AT_FDCWD, "/etc", 0o755) orelse {};
     _ = createFile("/etc/hostname", "zig-linux\n");
     _ = mkdiratImpl(AT_FDCWD, "/dev", 0o755) orelse {};
     _ = mkdiratImpl(AT_FDCWD, "/tmp", 0o777) orelse {};
+    _ = mkdiratImpl(AT_FDCWD, "/sbin", 0o755) orelse {};
     _ = createFile("/sbin/init", "#!/bin/sh\necho 'Hello from init'\n");
     printk.printk(.info, "vfs: ramfs mounted at / (ino={d}), VFS vtables ready", .{root_inode.ino});
 }
@@ -211,12 +217,11 @@ fn lookupChild(parent: *Dentry, component: []const u8) ?*Dentry {
 
 /// Split path into [start_dentry, component]. start_dentry is mount-aware.
 fn mountStart(target_path: []const u8) *Dentry {
+    const target = resolvePath(AT_FDCWD, target_path) orelse return root_dentry.?;
     var start = root_dentry.?;
     for (mounts[0..mount_count]) |m| {
-        if (m.root_dentry) |mnt_root| {
-            if (m.target.len > 0 and std.mem.eql(u8, m.target, target_path)) {
-                start = mnt_root;
-            }
+        if (m.root_dentry) |mounted| {
+            if (mounted == target) start = mounted;
         }
     }
     return start;
@@ -247,14 +252,19 @@ pub fn resolvePath(dirfd: i32, path: []const u8) ?*Dentry {
     if (path.len == 0) return null;
     if (path[0] == '/') {
         const d = lookupPath(root_dentry.?, path) orelse return null;
-        var cur: ?*Dentry = d;
-        while (cur) |c| {
-            if (c == jail.?) return d;
-            cur = c.parent;
-        }
-        return null; // outside jail — escape denied
+        return if (withinJail(d)) d else null;
     }
     return lookupPath(jail.?, path);
+}
+
+fn withinJail(dentry: *Dentry) bool {
+    const jail = jail_root orelse return true;
+    var current: ?*Dentry = dentry;
+    while (current) |d| {
+        if (d == jail) return true;
+        current = d.parent;
+    }
+    return false;
 }
 
 fn resolveRaw(dirfd: i32, path: []const u8) ?*Dentry {
@@ -271,35 +281,45 @@ pub fn lookup(path: []const u8) ?*Dentry {
     return lookupPath(root_dentry.?, path);
 }
 
+const ParentAndName = struct { parent: *Dentry, name: []const u8 };
+
+fn resolveParent(dirfd: i32, path: []const u8) ?ParentAndName {
+    if (path.len == 0) return null;
+    const name = basename(path);
+    if (name.len == 0 or name.len >= FNAME_MAX or
+        std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return null;
+
+    const parent_path = if (std.mem.lastIndexOf(u8, path, "/")) |idx|
+        (if (idx == 0) path[0..1] else path[0..idx])
+    else
+        "";
+    const parent = if (parent_path.len > 0)
+        resolvePath(dirfd, parent_path) orelse return null
+    else if (jail_root) |jail|
+        jail
+    else
+        resolveRaw(dirfd, "") orelse return null;
+    const inode = parent.inode orelse return null;
+    if (inode.ftype != .directory or parent.child_count >= parent.children.len) return null;
+    if (lookupChild(parent, name) != null) return null;
+    return .{ .parent = parent, .name = name };
+}
+
 pub fn createFile(path: []const u8, content: []const u8) ?*Dentry {
-    const rel = if (path.len > 0 and path[0] == '/') path[1..] else path;
-    const name = basename(rel);
+    return createFileAt(AT_FDCWD, path, content);
+}
+
+fn createFileAt(dirfd: i32, path: []const u8, content: []const u8) ?*Dentry {
+    const resolved = resolveParent(dirfd, path) orelse return null;
     const d = allocDentry() orelse return null;
     const ino = allocInode(.regular) orelse {
         freeDentrySlot(d);
         return null;
     };
-    d.setName(name);
-    d.inode = ino;
-    // Parent = containing dir (M5: basename fix — nested paths resolve by component).
-    const parent_path = if (std.mem.lastIndexOf(u8, rel, "/")) |idx| rel[0..idx] else "";
-    if (parent_path.len > 0) {
-        d.parent = lookup(parent_path) orelse root_dentry;
-    } else {
-        d.parent = root_dentry;
-    }
-    // Register as child of parent
-    if (d.parent) |p| {
-        if (p.child_count < 32) {
-            p.children[p.child_count] = d;
-            p.child_count += 1;
-        }
-    }
-    // Allocate backing data
     if (!fsCharge(content.len)) {
         freeDentrySlot(d);
         releaseInodeSlot(ino);
-        return null; // M5: ENOSPC at creation
+        return null;
     }
     const data = std.heap.page_allocator.alloc(u8, content.len) catch {
         fsRelease(content.len);
@@ -308,6 +328,11 @@ pub fn createFile(path: []const u8, content: []const u8) ?*Dentry {
         return null;
     };
     @memcpy(data, content);
+    d.setName(resolved.name);
+    d.inode = ino;
+    d.parent = resolved.parent;
+    resolved.parent.children[resolved.parent.child_count] = d;
+    resolved.parent.child_count += 1;
     ino.data = data;
     ino.size = content.len;
     ino.ops = &ramfs_ops;
@@ -315,34 +340,29 @@ pub fn createFile(path: []const u8, content: []const u8) ?*Dentry {
 }
 
 pub fn mkdiratImpl(dirfd: i32, path: []const u8, mode: u32) ?*Dentry {
-    _ = dirfd;
-    const name = if (path.len > 0 and path[0] == '/') path[1..] else path;
+    const resolved = resolveParent(dirfd, path) orelse return null;
     const d = allocDentry() orelse return null;
-    const ino = allocInode(.directory) orelse return null;
-    d.setName(name);
+    const ino = allocInode(.directory) orelse {
+        freeDentrySlot(d);
+        return null;
+    };
+    d.setName(resolved.name);
     d.inode = ino;
-    // Register as child of root (simplified: single-level for now)
-    d.parent = root_dentry;
-    if (root_dentry) |root| {
-        if (root.child_count < 32) {
-            root.children[root.child_count] = d;
-            root.child_count += 1;
-        }
-    }
+    d.parent = resolved.parent;
+    resolved.parent.children[resolved.parent.child_count] = d;
+    resolved.parent.child_count += 1;
     ino.mode = @intCast(mode);
     ino.ops = &ramfs_ops;
     return d;
 }
 
 pub fn openat(dirfd: i32, path: []const u8, flags: u32, mode: u32) ?*File {
-    const d = resolvePath(dirfd, path) orelse return null;
-    if (d.inode == null and (flags & O_CREAT) != 0) {
-        const new_d = createFile(path, &[_]u8{}) orelse return null;
-        if (new_d.inode) |inode| {
-            inode.mode = @intCast(mode & 0o7777 | 0o644);
-        }
+    const d = resolvePath(dirfd, path) orelse {
+        if ((flags & O_CREAT) == 0) return null;
+        const new_d = createFileAt(dirfd, path, &[_]u8{}) orelse return null;
+        if (new_d.inode) |inode| inode.mode = @intCast(mode & 0o7777 | 0o644);
         return openFile(new_d, flags);
-    }
+    };
     if (d.inode == null) return null;
     return openFile(d, flags);
 }
@@ -522,6 +542,11 @@ pub fn read(f: *File, buf: []u8) isize {
 }
 
 pub fn write(f: *File, data: []const u8) isize {
+    if (jail_root != null) {
+        if (f.dentry) |d| {
+            if (!withinJail(d)) return -13;
+        }
+    }
     if (f.ops) |ops| {
         if (ops.write) |func| return func(f, data);
     }
@@ -559,13 +584,15 @@ pub fn getcwd() []const u8 {
 }
 
 pub fn mkdirat(dirfd: i32, path: []const u8, mode: u32) bool {
-    _ = dirfd;
-    return mkdiratImpl(path, mode) != null;
+    return mkdiratImpl(dirfd, path, mode) != null;
 }
 
 pub fn unlinkat(dirfd: i32, path: []const u8, flags: u32) bool {
-    _ = dirfd; _ = flags;
-    if (lookup(path)) |d| {
+    _ = flags;
+    if (resolvePath(dirfd, path)) |d| {
+        if (jail_root) |jail| {
+            if (jail == d) return false;
+        }
         if (d.inode) |inode| {
             for (&inode_used, 0..) |*u, i| {
                 if (&inodes[i] == inode) {
@@ -582,40 +609,49 @@ pub fn unlinkat(dirfd: i32, path: []const u8, flags: u32) bool {
 // ── Mount table operations (vinix parity) ──
 pub fn mount(source: []const u8, target: []const u8, fs_type: []const u8, flags: u32, data: usize) bool {
     _ = source; _ = data;
-    if (mount_count >= MAX_MOUNTS) return false;
-    // Find target dentry via hierarchical lookup
-    const td = lookupPath(root_dentry.?, target) orelse return false;
-    // Check for duplicate mount
+    if (mount_count >= MAX_MOUNTS or target.len > mount_target_storage[0].len or
+        fs_type.len > mount_type_storage[0].len) return false;
+    const td = resolvePath(AT_FDCWD, target) orelse return false;
     for (mounts[0..mount_count]) |m| {
         if (m.root_dentry) |existing| {
             if (existing == td) return false;
         }
     }
-    mounts[mount_count] = .{
-        .target = target,
-        .fs_type = fs_type,
-        .root_dentry = td,
-        .flags = flags,
-    };
+    storeMount(mount_count, target, fs_type, td, flags);
     mount_count += 1;
     printk.printk(.info, "vfs: mounted {s} at {s}", .{ fs_type, target });
     return true;
 }
 
+fn storeMount(idx: usize, target: []const u8, fs_type: []const u8, dentry: *Dentry, flags: u32) void {
+    @memcpy(mount_target_storage[idx][0..target.len], target);
+    @memcpy(mount_type_storage[idx][0..fs_type.len], fs_type);
+    mounts[idx] = .{
+        .target = mount_target_storage[idx][0..target.len],
+        .fs_type = mount_type_storage[idx][0..fs_type.len],
+        .root_dentry = dentry,
+        .flags = flags,
+    };
+}
+
 pub fn umount(target: []const u8, flags: u32) bool {
     _ = flags;
+    const td = resolvePath(AT_FDCWD, target) orelse return false;
     var found: ?usize = null;
     for (mounts[0..mount_count], 0..) |m, i| {
-        if (m.target.len > 0 and std.mem.eql(u8, m.target, target)) {
-            found = i;
-            break;
+        if (m.root_dentry) |mounted| {
+            if (mounted == td) {
+                found = i;
+                break;
+            }
         }
     }
     if (found) |idx| {
         // Compact
         var j = idx;
         while (j < mount_count - 1) : (j += 1) {
-            mounts[j] = mounts[j + 1];
+            const next = mounts[j + 1];
+            storeMount(j, next.target, next.fs_type, next.root_dentry.?, next.flags);
         }
         mount_count -= 1;
         printk.printk(.info, "vfs: umounted {s}", .{target});
@@ -625,31 +661,43 @@ pub fn umount(target: []const u8, flags: u32) bool {
 }
 
 pub fn readlinkat(dirfd: i32, path: []const u8, buf: []u8, len: usize) isize {
-    _ = dirfd; _ = len;
-    const d = lookup(path) orelse return -2;
+    const d = resolvePath(dirfd, path) orelse return -2;
+    const out = buf[0..@min(buf.len, len)];
     if (d.symlink_target) |target| {
-        const n = @min(buf.len, target.len);
-        @memcpy(buf[0..n], target[0..n]);
+        const n = @min(out.len, target.len);
+        @memcpy(out[0..n], target[0..n]);
         return @intCast(n);
     }
     return -2;
 }
 
 pub fn linkat(old_dirfd: i32, old_path: []const u8, new_dirfd: i32, new_path: []const u8, flags: u32) bool {
-    _ = old_dirfd; _ = new_dirfd; _ = flags;
-    const old_d = lookup(old_path) orelse return false;
-    const new_name = if (new_path.len > 0 and new_path[0] == '/') new_path[1..] else new_path;
+    _ = flags;
+    const old_d = resolvePath(old_dirfd, old_path) orelse return false;
+    const inode = old_d.inode orelse return false;
+    if (inode.ftype == .directory) return false;
+    const resolved = resolveParent(new_dirfd, new_path) orelse return false;
     const new_d = allocDentry() orelse return false;
-    new_d.setName(new_name);
-    new_d.inode = old_d.inode;
-    new_d.parent = root_dentry;
+    new_d.setName(resolved.name);
+    new_d.inode = inode;
+    new_d.parent = resolved.parent;
+    resolved.parent.children[resolved.parent.child_count] = new_d;
+    resolved.parent.child_count += 1;
     return true;
 }
 
 pub fn fchmod(fd: usize, mode: u32) bool {
-    if (fd >= MAX_OPEN_FILES) return false;
-    const f = &open_files[fd];
-    if (f.inode) |inode| {
+    if (fd >= MAX_OPEN_FILES or !open_used[fd]) return false;
+    return fchmodFile(&open_files[fd], mode);
+}
+
+pub fn fchmodFile(file: *File, mode: u32) bool {
+    if (jail_root != null) {
+        if (file.dentry) |d| {
+            if (!withinJail(d)) return false;
+        } else return false;
+    }
+    if (file.inode) |inode| {
         inode.mode = @intCast(mode & 0o7777 | (inode.mode & 0o170000));
         return true;
     }
