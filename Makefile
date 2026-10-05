@@ -31,11 +31,7 @@ qemu-run: qemu-bin
 
 # QEMU headless test (for CI)
 qemu-test: qemu-bin
-	@echo "=== Running kernel in QEMU headless mode ==="
-	@./scripts/run-qemu.sh -n 2>&1 | tee zig-out/qemu-output.log || true
-	@echo ""
-	@echo "=== Checking for expected output ==="
-	@grep -q "Kernel summary" zig-out/qemu-output.log && echo "✅ QEMU test PASSED" || echo "❌ QEMU test FAILED"
+	@bash ./scripts/qemu-test.sh
 
 # Linux-style release tarball (like `make tar-pkg`): zig-kernel-$VERSION.tar.{gz,xz} + bin + SHA256SUMS
 VERSION ?= $(shell grep -Po '\.version\s*=\s*"\K[^"]+' build.zig.zon 2>/dev/null || echo 0.1.0)

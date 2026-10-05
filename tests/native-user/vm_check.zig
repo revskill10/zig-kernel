@@ -1091,7 +1091,7 @@ test "multiple release refusals retain all identities" {
     try std.testing.expectError(error.InvalidState, vm.reset(&h.space));
 }
 
-test "scrub access failure still frees owned frames" {
+test "scrub access failure quarantines owned frames until retry" {
     var h = try Harness.init(48, 64);
     defer h.deinit();
     h.arm();
@@ -1099,11 +1099,19 @@ test "scrub access failure still frees owned frames" {
     const img = tinyImage(&buf);
     try vm.construct(&h.prov, img, h.tmpl, &h.space);
     try checkTiny(&h, img);
+    const owned = h.space.ownedCount();
     h.prov.fail_scrub = true;
-    try vm.destroy(&h.prov, &h.space, .inactive);
+    try std.testing.expectError(error.ReleaseFailed, vm.destroy(&h.prov, &h.space, .inactive));
+    try std.testing.expectEqual(owned, h.space.ownedCount());
+    try std.testing.expectEqual(owned, h.prov.liveCount());
+    try std.testing.expectEqual(vm.State.destroyed, h.space.state);
+    try std.testing.expect(h.space.journal.contains(h.space.failed_release_frame));
+    try h.kernelUnchanged();
+
+    h.prov.fail_scrub = false;
+    try vm.retryRelease(&h.prov, &h.space);
     try std.testing.expectEqual(@as(usize, 0), h.space.ownedCount());
     try std.testing.expectEqual(@as(usize, 0), h.prov.liveCount());
-    try std.testing.expectEqual(vm.State.destroyed, h.space.state);
     try h.kernelUnchanged();
 }
 

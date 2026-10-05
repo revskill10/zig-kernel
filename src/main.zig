@@ -619,6 +619,13 @@ test "m2: uaccess checked copies vs VMA gate" {
     @memset(region[256..272], 'A');
     try std.testing.expectEqual(@as(?usize, null), uaccess.copyCStrFromUser(base + 256, out[0..8]));
     try std.testing.expectEqual(@as(?usize, null), uaccess.copyCStrFromUser(base + 0x10000000, &out));
+
+    try std.testing.expect(mm.mmap(base, 4096, mm.PROT_READ, mm.MAP_PRIVATE | mm.MAP_FIXED) == null);
+    try std.testing.expect(mm.mmap(0, 0, mm.PROT_READ, mm.MAP_PRIVATE) == null);
+    try std.testing.expect(mm.mmap(0, std.math.maxInt(usize), mm.PROT_READ, mm.MAP_PRIVATE) == null);
+    try std.testing.expect(mm.mmap(std.math.maxInt(usize) - 4095, 8192, mm.PROT_READ, mm.MAP_PRIVATE | mm.MAP_FIXED) == null);
+    try std.testing.expectEqual(@as(i32, -1), mm.munmap(std.math.maxInt(usize) - 4095, 8192));
+    try std.testing.expectEqual(@as(i32, -1), mm.mprotect(std.math.maxInt(usize), 1, mm.PROT_READ));
 }
 
 test "m3: elf64 validate→load VMAs→stack→entry" {
@@ -706,7 +713,7 @@ test "m3: exit/wait lifecycle + stdout/stderr split via dispatch" {
     try std.testing.expectEqual(@as(isize, -10), entry_mod.dispatch(sc.NR.waitpid, 99999, 0, 1, 0)); // ECHILD
     // stdout/stderr split: fd1/fd2 captured per-pid, validated user pointers
     var region: [256]u8 align(4096) = [_]u8{0} ** 256;
-    _ = mm.mmap(@intFromPtr(&region[0]), region.len, mm.PROT_READ, mm.MAP_PRIVATE | mm.MAP_ANONYMOUS | mm.MAP_FIXED) orelse return error.NoMem;
+    _ = mm.mmap(@intFromPtr(&region[0]), region.len, mm.PROT_READ | mm.PROT_WRITE, mm.MAP_PRIVATE | mm.MAP_ANONYMOUS | mm.MAP_FIXED) orelse return error.NoMem;
     const pid = proc_mod.getpid();
     capture.reset(pid);
     @memcpy(region[0..9], "out-data\n");
@@ -718,6 +725,17 @@ test "m3: exit/wait lifecycle + stdout/stderr split via dispatch" {
     // bad pointer → -EFAULT, streams untouched
     try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.write, 1, 0x1000, 9, 0));
     try std.testing.expectEqual(@as(usize, 9), capture.stdoutOf(pid).len);
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.openat, 0, 0x1000, 0, 0));
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.fstat, 0, 0x1000, 0, 0));
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.fstat, 0, @intFromPtr(&region[1]), 0, 0));
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.waitpid, 99999, 0x1000, 0, 0));
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.getgroups, 4, 0x1000, 0, 0));
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.readdir, 0, 0x1000, 64, 0));
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.pipe, 0x1000, 0, 0, 0));
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.futex_wait, 0x1000, 0, 0, 0));
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.getcwd, 0x1000, 64, 0, 0));
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.gethostname, 0x1000, 64, 0, 0));
+    try std.testing.expectEqual(@as(isize, -14), entry_mod.dispatch(sc.NR.sethostname, 0x1000, 5, 0, 0));
     capture.reset(pid);
     proc_mod.init();
 }
@@ -728,13 +746,29 @@ test "m5: jail confines, quota contains, reset wipes" {
         vfs.clearJail();
         vfs.init();
     }
+    const outside_file = vfs.open("/hello.txt") orelse return error.NoMem;
+    defer vfs.close(outside_file);
     // jail auto-creates /workspace
     try std.testing.expect(vfs.setJail("/workspace"));
+    try std.testing.expect(vfs.createFile("/hello-escape", "x") == null);
+    try std.testing.expect(vfs.mkdiratImpl(vfs.AT_FDCWD, "/tmp/escape", 0o755) == null);
+    try std.testing.expect(!vfs.unlinkat(vfs.AT_FDCWD, "/etc/hostname", 0));
+    try std.testing.expect(!vfs.mount("none", "/tmp", "tmpfs", 0, 0));
+    try std.testing.expect(!vfs.umount("/tmp", 0));
+    try std.testing.expectEqual(@as(isize, -13), vfs.write(outside_file, "blocked"));
+    try std.testing.expect(!vfs.fchmodFile(outside_file, 0o600));
     const used0 = vfs.fsUsed();
     try std.testing.expect(used0 > 0); // seed files charged
     // file inside jail resolvable; outside denied
     _ = vfs.createFile("/workspace/tool", "binary-bytes") orelse return error.NoMem;
     try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/workspace/tool") != null);
+    try std.testing.expect(!vfs.linkat(vfs.AT_FDCWD, "/workspace/tool", vfs.AT_FDCWD, "/tmp/linked", 0));
+    try std.testing.expect(vfs.linkat(vfs.AT_FDCWD, "/workspace/tool", vfs.AT_FDCWD, "/workspace/tool-link", 0));
+    const created = vfs.openat(vfs.AT_FDCWD, "created", vfs.O_CREAT, 0o600) orelse return error.NoMem;
+    defer vfs.close(created);
+    try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/workspace/created") != null);
+    try std.testing.expect(vfs.mount("none", "/workspace/tool", "tmpfs", 0, 0));
+    try std.testing.expect(vfs.umount("/workspace/tool", 0));
     try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/etc/hostname") == null); // escape denied
     try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/hello.txt") == null); // outside jail
     try std.testing.expect(vfs.resolvePath(vfs.AT_FDCWD, "/workspace/../hello.txt") == null); // .. denied

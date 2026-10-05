@@ -95,12 +95,13 @@ fn userPath(ptr: usize) ?[]const u8 {
     return path_buf[0..n];
 }
 
-// Legacy helper: kernel-trusted pointers only (tests, init). Syscall handlers
-// must use userPath / uaccess.validate, never this.
-fn ptrToSlice(ptr: usize) ?[]const u8 {
-    if (ptr == 0) return null;
-    const cstr = @as([*:0]const u8, @ptrFromInt(ptr));
-    return std.mem.span(cstr);
+fn copyUserPath(ptr: usize, out: []u8) ?[]const u8 {
+    const n = uaccess.copyCStrFromUser(ptr, out) orelse return null;
+    return out[0..n];
+}
+
+fn validateUserAligned(ptr: usize, len: usize, alignment: usize, write: bool) bool {
+    return ptr % alignment == 0 and uaccess.validate(ptr, len, write);
 }
 
 // ── Syscall handlers (all callconv .c) ──
@@ -157,12 +158,14 @@ fn sys_ioctl(fd: usize, cmd: usize, arg: usize, _a3: usize) callconv(.c) isize {
 
 fn sys_fstat(fd: usize, stat_buf: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a2; _ = _a3;
+    if (!validateUserAligned(stat_buf, @sizeOf(stat_mod.Stat), @alignOf(stat_mod.Stat), true)) return -14;
     const sb = @as(*stat_mod.Stat, @ptrFromInt(stat_buf));
     return if (vfs.fstat(@intCast(fd), sb)) 0 else -9; // -EBADF
 }
 
 fn sys_fstatat(dirfd: usize, path_ptr: usize, stat_buf: usize, flags: usize) callconv(.c) isize {
-    const path = ptrToSlice(path_ptr) orelse return -22;
+    const path = userPath(path_ptr) orelse return -14;
+    if (!validateUserAligned(stat_buf, @sizeOf(stat_mod.Stat), @alignOf(stat_mod.Stat), true)) return -14;
     const sb = @as(*stat_mod.Stat, @ptrFromInt(stat_buf));
     return if (vfs.fstatat(@intCast(dirfd), path, sb, @intCast(flags))) 0 else -2;
 }
@@ -191,12 +194,15 @@ fn sys_exit(code: usize, _a1: usize, _a2: usize, _a3: usize) callconv(.c) isize 
 
 fn sys_waitpid(pid: usize, wstatus: usize, options: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
+    if (wstatus != 0 and !validateUserAligned(wstatus, @sizeOf(u32), @alignOf(u32), true)) return -14;
     return @intCast(proc_mod.waitpid(@intCast(pid), @intCast(wstatus), @intCast(options)));
 }
 
 fn sys_execve(path_ptr: usize, argv_ptr: usize, envp_ptr: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
-    const path = ptrToSlice(path_ptr) orelse return -22;
+    const path = userPath(path_ptr) orelse return -14;
+    if (argv_ptr != 0 and !uaccess.validate(argv_ptr, @sizeOf(usize), false)) return -14;
+    if (envp_ptr != 0 and !uaccess.validate(envp_ptr, @sizeOf(usize), false)) return -14;
     return @intCast(proc_mod.execve(path, argv_ptr, envp_ptr));
 }
 
@@ -215,16 +221,12 @@ fn sys_getgroups(size: usize, list_ptr: usize, _a2: usize, _a3: usize) callconv(
     const p = proc_mod.currentProcess();
     // Return number of supplementary groups
     const ngroups: usize = p.groups.len;
-    if (size >= ngroups) {
-        // Copy groups to user buffer
-        const list = @as(*[16]u32, @ptrFromInt(list_ptr));
-        @memcpy(list, &p.groups);
-        return @intCast(ngroups);
-    } else if (size > 0) {
-        // Copy as many groups as fit
-        const list = @as(*[16]u32, @ptrFromInt(list_ptr));
-        const to_copy = @min(size, p.groups.len);
-        @memcpy(list[0..to_copy], p.groups[0..to_copy]);
+    if (size >= ngroups or size > 0) {
+        const to_copy = if (size >= ngroups) ngroups else @min(size, p.groups.len);
+        const bytes = to_copy * @sizeOf(u32);
+        if (!validateUserAligned(list_ptr, bytes, @alignOf(u32), true)) return -14;
+        const list = @as([*]u32, @ptrFromInt(list_ptr))[0..to_copy];
+        @memcpy(list, p.groups[0..to_copy]);
         return @intCast(to_copy);
     }
     return @intCast(ngroups);
@@ -237,39 +239,49 @@ fn sys_kill(pid: usize, sig: usize, _a2: usize, _a3: usize) callconv(.c) isize {
 
 fn sys_sigentry(sigentry: usize, _a1: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a1; _ = _a2; _ = _a3;
+    if (sigentry != 0) {
+        const vma = mm_mod.findVma(sigentry) orelse return -14;
+        if (vma.prot & mm_mod.PROT_EXEC == 0 or !entry.gdt.isUserRange(sigentry, 1)) return -14;
+    }
     proc_mod.setSigEntry(@intCast(sigentry));
     return 0;
 }
 
 fn sys_sigprocmask(how: usize, set_ptr: usize, oldset_ptr: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
+    if (set_ptr != 0 and !validateUserAligned(set_ptr, @sizeOf(u64), @alignOf(u64), false)) return -14;
+    if (oldset_ptr != 0 and !validateUserAligned(oldset_ptr, @sizeOf(u64), @alignOf(u64), true)) return -14;
     return @intCast(proc_mod.sigprocmask(@intCast(how), set_ptr, oldset_ptr));
 }
 
 fn sys_sigaction(sig: usize, act_ptr: usize, oldact_ptr: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
+    if (act_ptr != 0 and !validateUserAligned(act_ptr, @sizeOf(usize), @alignOf(usize), false)) return -14;
+    if (oldact_ptr != 0 and !validateUserAligned(oldact_ptr, @sizeOf(usize), @alignOf(usize), true)) return -14;
     return @intCast(proc_mod.sigaction(@intCast(sig), act_ptr, oldact_ptr));
 }
 
 fn sys_sigreturn(ctx_ptr: usize, old_mask: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a2; _ = _a3;
+    if (ctx_ptr != 0 and !uaccess.validate(ctx_ptr, 1, false)) return -14;
     return proc_mod.sigreturn(ctx_ptr, old_mask);
 }
 
 // ── Filesystem syscalls ──
 fn sys_chdir(path_ptr: usize, _a1: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a1; _ = _a2; _ = _a3;
-    const path = ptrToSlice(path_ptr) orelse return -22;
+    const path = userPath(path_ptr) orelse return -14;
     return if (vfs.chdir(path)) 0 else -2;
 }
 
 fn sys_readdir(fd: usize, buf_ptr: usize, count: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
+    if (!validateUserAligned(buf_ptr, count, @alignOf(stat_mod.Dirent), true)) return -14;
     return vfs.readdir(@intCast(fd), buf_ptr, count);
 }
 
 fn sys_faccessat(dirfd: usize, path_ptr: usize, mode: usize, flags: usize) callconv(.c) isize {
-    const path = ptrToSlice(path_ptr) orelse return -22; // EINVAL
+    const path = userPath(path_ptr) orelse return -14;
     // Simplified: check if file exists
     const d = vfs.resolvePath(@intCast(dirfd), path) orelse return -2; // ENOENT
     _ = d.inode; // Check if inode exists
@@ -291,8 +303,10 @@ fn sys_faccessat(dirfd: usize, path_ptr: usize, mode: usize, flags: usize) callc
 fn sys_getcwd(buf_ptr: usize, len: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a2; _ = _a3;
     const cwd = vfs.getcwd();
-    if (cwd.len + 1 > len) return -34;
-    const buf = @as([*]u8, @ptrFromInt(buf_ptr))[0..len];
+    const required = cwd.len + 1;
+    if (required > len) return -34;
+    if (!uaccess.validate(buf_ptr, required, true)) return -14;
+    const buf = @as([*]u8, @ptrFromInt(buf_ptr))[0..required];
     @memcpy(buf[0..cwd.len], cwd);
     buf[cwd.len] = 0;
     return @intCast(cwd.len + 1);
@@ -300,58 +314,66 @@ fn sys_getcwd(buf_ptr: usize, len: usize, _a2: usize, _a3: usize) callconv(.c) i
 
 fn sys_mkdirat(dirfd: usize, path_ptr: usize, mode: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
-    const path = ptrToSlice(path_ptr) orelse return -22;
+    const path = userPath(path_ptr) orelse return -14;
     return if (vfs.mkdiratImpl(@intCast(dirfd), path, @intCast(mode)) != null) 0 else -2;
 }
 
 fn sys_unlinkat(dirfd: usize, path_ptr: usize, flags: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
-    const path = ptrToSlice(path_ptr) orelse return -22;
+    const path = userPath(path_ptr) orelse return -14;
     return if (vfs.unlinkat(@intCast(dirfd), path, @intCast(flags))) 0 else -2;
 }
 
 fn sys_rmdirat(dirfd: usize, path_ptr: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a2; _ = _a3;
-    const path = ptrToSlice(path_ptr) orelse return -22;
+    const path = userPath(path_ptr) orelse return -14;
     return if (vfs.unlinkat(@intCast(dirfd), path, 0x200)) 0 else -2; // AT_REMOVEDIR
 }
 
 fn sys_readlinkat(dirfd: usize, path_ptr: usize, buf_ptr: usize, len: usize) callconv(.c) isize {
-    const path = ptrToSlice(path_ptr) orelse return -22;
+    const path = userPath(path_ptr) orelse return -14;
+    if (!uaccess.validate(buf_ptr, len, true)) return -14;
     const buf = @as([*]u8, @ptrFromInt(buf_ptr))[0..len];
     return vfs.readlinkat(@intCast(dirfd), path, buf, len);
 }
 
 fn sys_linkat(old_dirfd: usize, old_path_ptr: usize, new_dirfd: usize, new_path_ptr: usize) callconv(.c) isize {
-    const old_path = ptrToSlice(old_path_ptr) orelse return -22;
-    const new_path = ptrToSlice(new_path_ptr) orelse return -22;
+    var old_buf: [512]u8 = undefined;
+    var new_buf: [512]u8 = undefined;
+    const old_path = copyUserPath(old_path_ptr, &old_buf) orelse return -14;
+    const new_path = copyUserPath(new_path_ptr, &new_buf) orelse return -14;
     return if (vfs.linkat(@intCast(old_dirfd), old_path, @intCast(new_dirfd), new_path, 0)) 0 else -2;
 }
 
 fn sys_fchmod(fd: usize, mode: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a2; _ = _a3;
     const f = proc_mod.fdAt(fd) orelse return -9; // -EBADF
-    if (f.inode) |inode| {
-        inode.mode = @intCast(mode & 0o7777 | (inode.mode & 0o170000)); // Preserve file type bits
-        return 0;
-    }
-    return -9;
+    if (f.inode == null) return -9;
+    return if (vfs.fchmodFile(f, @intCast(mode))) 0 else -13;
 }
 
 fn sys_mount(source_ptr: usize, target_ptr: usize, fs_type_ptr: usize, flags: usize) callconv(.c) isize {
-    const source = ptrToSlice(source_ptr) orelse return -22;
-    const target = ptrToSlice(target_ptr) orelse return -22;
-    const fs_type = ptrToSlice(fs_type_ptr) orelse return -22;
+    var source_buf: [512]u8 = undefined;
+    var target_buf: [512]u8 = undefined;
+    var type_buf: [512]u8 = undefined;
+    const source = copyUserPath(source_ptr, &source_buf) orelse return -14;
+    const target = copyUserPath(target_ptr, &target_buf) orelse return -14;
+    const fs_type = copyUserPath(fs_type_ptr, &type_buf) orelse return -14;
     return if (vfs.mount(source, target, fs_type, @intCast(flags), 0)) 0 else -2;
 }
 
 fn sys_umount(target_ptr: usize, flags: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a2; _ = _a3;
-    const target = ptrToSlice(target_ptr) orelse return -22;
+    const target = userPath(target_ptr) orelse return -14;
     return if (vfs.umount(target, @intCast(flags))) 0 else -2;
 }
 
 fn sys_ppoll(fds_ptr: usize, nfds: usize, timeout_ptr: usize, sigmask_ptr: usize) callconv(.c) isize {
+    const pollfd_size = @sizeOf(i32) + 2 * @sizeOf(i16);
+    const fds_bytes = std.math.mul(usize, nfds, pollfd_size) catch return -22;
+    if (nfds != 0 and !uaccess.validate(fds_ptr, fds_bytes, false)) return -14;
+    if (timeout_ptr != 0 and !uaccess.validate(timeout_ptr, @sizeOf(time_mod.TimeSpec), false)) return -14;
+    if (sigmask_ptr != 0 and !uaccess.validate(sigmask_ptr, @sizeOf(u64), false)) return -14;
     // vinix parity: ppoll monitors multiple fds with signal mask
     // Simplified implementation: returns 0 (timeout) for hosted simulation
     // Full implementation would:
@@ -396,7 +418,7 @@ fn sys_signalfd(fd: usize, sigmask_ptr: usize, sigset_size: usize, _a3: usize) c
     // 3. Return fd that becomes readable when signals pending
     
     _ = _a3;
-    _ = sigset_size;
+    if (sigmask_ptr != 0 and !uaccess.validate(sigmask_ptr, sigset_size, false)) return -14;
     
     // For hosted simulation, we return a pseudo-fd (200) that indicates
     // signalfd is "created" but won't work on actual reads
@@ -436,6 +458,7 @@ fn sys_mprotect(addr: usize, len: usize, prot: usize, _a3: usize) callconv(.c) i
 // ── Pipe syscalls ──
 fn sys_pipe(pipefd_ptr: usize, flags: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a2; _ = _a3;
+    if (!validateUserAligned(pipefd_ptr, 2 * @sizeOf(i32), @alignOf(i32), true)) return -14;
     const pipefd = @as([*]i32, @ptrFromInt(pipefd_ptr))[0..2];
     return @intCast(pipe_mod.pipe(pipefd, @intCast(flags)));
 }
@@ -443,11 +466,13 @@ fn sys_pipe(pipefd_ptr: usize, flags: usize, _a2: usize, _a3: usize) callconv(.c
 // ── Futex syscalls ──
 fn sys_futex_wait(addr: usize, expected: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a2; _ = _a3;
+    if (!uaccess.validate(addr, @sizeOf(u32), false)) return -14;
     return @intCast(futex_mod.wait(@intCast(addr), @intCast(expected)));
 }
 
 fn sys_futex_wake(addr: usize, _a1: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a1; _ = _a2; _ = _a3;
+    if (!uaccess.validate(addr, @sizeOf(u32), false)) return -14;
     return @intCast(futex_mod.wake(@intCast(addr)));
 }
 
@@ -457,7 +482,7 @@ fn sys_clock_get(clk_id: usize, tp_ptr: usize, _a2: usize, _a3: usize) callconv(
     const ts_ns = time_mod.monotonicNs();
     if (tp_ptr != 0) {
         // M2: validate user out-pointer before write.
-        if (!uaccess.validate(tp_ptr, @sizeOf(time_mod.TimeSpec), true)) return -14;
+        if (!validateUserAligned(tp_ptr, @sizeOf(time_mod.TimeSpec), @alignOf(time_mod.TimeSpec), true)) return -14;
         const tp = @as(*time_mod.TimeSpec, @ptrFromInt(tp_ptr));
         tp.tv_sec = @divTrunc(@as(i64, @intCast(ts_ns)), 1_000_000_000);
         tp.tv_nsec = @intCast(ts_ns % 1_000_000_000);
@@ -467,7 +492,8 @@ fn sys_clock_get(clk_id: usize, tp_ptr: usize, _a2: usize, _a3: usize) callconv(
 }
 
 fn sys_nanosleep(req_ptr: usize, rem_ptr: usize, _a2: usize, _a3: usize) callconv(.c) isize {
-    _ = rem_ptr; _ = _a2; _ = _a3;
+    _ = _a2; _ = _a3;
+    if (rem_ptr != 0 and !uaccess.validate(rem_ptr, @sizeOf(time_mod.TimeSpec), true)) return -14;
     if (req_ptr != 0) {
         // M2: validate user in-pointer before read.
         var req: time_mod.TimeSpec = undefined;
@@ -489,6 +515,7 @@ fn sys_socket(domain: usize, sock_type: usize, proto: usize, _a3: usize) callcon
 
 fn sys_bind(fd: usize, addr_ptr: usize, addr_len: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
+    if (!uaccess.validate(addr_ptr, addr_len, false)) return -14;
     const addr = @as([*]const u8, @ptrFromInt(addr_ptr))[0..addr_len];
     sock.bind(@intCast(fd), addr) catch |e| return errnoOf(e);
     return 0;
@@ -502,6 +529,7 @@ fn sys_listen(fd: usize, backlog: usize, _a2: usize, _a3: usize) callconv(.c) is
 
 fn sys_connect(fd: usize, addr_ptr: usize, addr_len: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
+    if (!uaccess.validate(addr_ptr, addr_len, false)) return -14;
     const addr = @as([*]const u8, @ptrFromInt(addr_ptr))[0..addr_len];
     sock.connect(@intCast(fd), addr) catch |e| return errnoOf(e);
     return 0;
@@ -509,6 +537,11 @@ fn sys_connect(fd: usize, addr_ptr: usize, addr_len: usize, _a3: usize) callconv
 
 fn sys_getpeername(fd: usize, addr_ptr: usize, len_ptr: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
+    const socket = sock.findSock(@intCast(fd)) orelse return -9;
+    if (socket.state != .connected) return -107;
+    if (addr_ptr == 0 or len_ptr == 0 or
+        !uaccess.validate(addr_ptr, socket.peer_len, true) or
+        !validateUserAligned(len_ptr, @sizeOf(usize), @alignOf(usize), true)) return -14;
     const result = sock.getpeername(@intCast(fd), addr_ptr, len_ptr) catch |e| return errnoOf(e);
     return result;
 }
@@ -521,11 +554,13 @@ fn sys_accept(fd: usize, addr_ptr: usize, len_ptr: usize, flags: usize) callconv
 
 fn sys_recvmsg(fd: usize, buf_ptr: usize, len: usize, _a3: usize) callconv(.c) isize {
     _ = _a3;
+    if (!uaccess.validate(buf_ptr, len, true)) return -14;
     const buf = @as([*]u8, @ptrFromInt(buf_ptr))[0..len];
     return @intCast(sock.recv(@intCast(fd), buf) catch |e| return errnoOf(e));
 }
 
 fn sys_socketpair(domain: usize, sock_type: usize, proto: usize, ret_ptr: usize) callconv(.c) isize {
+    if (!validateUserAligned(ret_ptr, 2 * @sizeOf(i32), @alignOf(i32), true)) return -14;
     const ret = @as([*]i32, @ptrFromInt(ret_ptr))[0..2];
     sock.socketpair(@intCast(domain), @intCast(sock_type), @intCast(proto), ret) catch |e| return errnoOf(e);
     return 0;
@@ -533,6 +568,9 @@ fn sys_socketpair(domain: usize, sock_type: usize, proto: usize, ret_ptr: usize)
 
 fn sys_new_thread(pc: usize, stack: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a2; _ = _a3;
+    const code = mm_mod.findVma(pc) orelse return -14;
+    if (code.prot & mm_mod.PROT_EXEC == 0 or !entry.gdt.isUserRange(pc, 1)) return -14;
+    if (stack == 0 or !uaccess.validate(stack - 1, 1, true)) return -14;
     const tid = proc_mod.newThread(@intCast(pc), @intCast(stack));
     return @intCast(tid);
 }
@@ -552,15 +590,18 @@ pub fn recv(fd: i32, buf: []u8) isize {
 fn sys_gethostname(buf_ptr: usize, len: usize, _a2: usize, _a3: usize) callconv(.c) isize {
     _ = _a2; _ = _a3;
     const hostname = "zig-kernel";
-    if (hostname.len + 1 > len) return -34;
-    const buf = @as([*]u8, @ptrFromInt(buf_ptr))[0..len];
+    const required = hostname.len + 1;
+    if (required > len) return -34;
+    if (!uaccess.validate(buf_ptr, required, true)) return -14;
+    const buf = @as([*]u8, @ptrFromInt(buf_ptr))[0..required];
     @memcpy(buf[0..hostname.len], hostname);
     buf[hostname.len] = 0;
     return @intCast(hostname.len + 1);
 }
 
 fn sys_sethostname(name_ptr: usize, len: usize, _a2: usize, _a3: usize) callconv(.c) isize {
-    _ = name_ptr; _ = len; _ = _a2; _ = _a3;
+    _ = _a2; _ = _a3;
+    if (!uaccess.validate(name_ptr, len, false)) return -14;
     // Store hostname (skipped in sim)
     return 0;
 }

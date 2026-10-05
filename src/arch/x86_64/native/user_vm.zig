@@ -512,7 +512,10 @@ fn releaseAll(provider: anytype, space: *AddressSpace) error{ReleaseFailed}!void
     while (i > 0) {
         i -= 1;
         const phys = space.journal.frames[i];
-        scrub(provider, phys);
+        if (!scrub(provider, phys)) {
+            if (fail == null) fail = phys;
+            continue;
+        }
         if (provider.freePage(phys)) {
             space.journal.frames[i] = released_mark;
         } else if (fail == null) {
@@ -546,10 +549,11 @@ fn releaseAll(provider: anytype, space: *AddressSpace) error{ReleaseFailed}!void
     space.failed_release_frame = 0;
 }
 
-fn scrub(provider: anytype, phys: u64) void {
-    if (phys == 0) return;
-    const page = provider.pageBytes(phys) catch return;
+fn scrub(provider: anytype, phys: u64) bool {
+    if (phys == 0) return true;
+    const page = provider.pageBytes(phys) catch return false;
     @memset(page, 0);
+    return true;
 }
 
 fn clearCounts(space: *AddressSpace) void {
